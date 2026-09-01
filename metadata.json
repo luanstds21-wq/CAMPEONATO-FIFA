@@ -1,0 +1,6 @@
+{
+  "name": "FIFA Champions 48 - Painel de Torneio",
+  "description": "Aplicativo completo e moderno para gerenciamento do campeonato de FIFA com 48 times, 12 grupos, mata-mata e estatísticas ao vivo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
