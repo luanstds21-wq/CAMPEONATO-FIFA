@@ -3,6 +3,8 @@ import {
   Award,
   BarChart3,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Crown,
   Flame,
   Goal,
@@ -19,18 +21,32 @@ import { useTournament } from '../context/TournamentContext';
 import { TeamBadge } from './TeamBadge';
 
 export const StatsView: React.FC = () => {
-  const { topScorers = [], topAssists = [], mostGoals = [], leastConceded = [], allTeamStats = [] } =
-    useTournament();
+  const {
+    topScorers = [],
+    topAssists = [],
+    topContributions = [],
+    mostGoals = [],
+    leastConceded = [],
+    allTeamStats = [],
+    setSelectedPlayerName,
+    setSelectedTeamName,
+  } = useTournament();
 
   const [activeTab, setActiveTab] = useState<
-    'scorers' | 'assists' | 'teams_attack' | 'teams_defense' | 'all_teams'
+    'scorers' | 'assists' | 'contributions' | 'teams_attack' | 'teams_defense' | 'all_teams'
   >('scorers');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Top 5 vs Show All toggles
+  const [showAllScorers, setShowAllScorers] = useState<boolean>(false);
+  const [showAllAssists, setShowAllAssists] = useState<boolean>(false);
+  const [showAllContributions, setShowAllContributions] = useState<boolean>(false);
+
   const statsTabs = [
-    { id: 'scorers', label: '👑 Artilharia', icon: Crown },
+    { id: 'scorers', label: '⚽ Gols', icon: Goal },
     { id: 'assists', label: '🎯 Assistências', icon: Target },
-    { id: 'teams_attack', label: '⚽ Melhores Ataques', icon: Flame },
+    { id: 'contributions', label: '⚡ Participações em Gols', icon: Sparkles },
+    { id: 'teams_attack', label: '🔥 Melhores Ataques', icon: Flame },
     { id: 'teams_defense', label: '🧤 Melhores Defesas', icon: Shield },
     { id: 'all_teams', label: '📊 Tabela dos 48 Times', icon: Users },
   ];
@@ -48,9 +64,21 @@ export const StatsView: React.FC = () => {
       p?.team?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const filteredContributions = (topContributions || []).filter(
+    p =>
+      p?.player?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      p?.team?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   const filteredAllTeams = (allTeamStats || []).filter(t =>
     t?.team?.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Slices for Top 5 / Show All
+  const displayedScorers = showAllScorers || searchQuery ? filteredScorers : filteredScorers.slice(0, 5);
+  const displayedAssists = showAllAssists || searchQuery ? filteredAssists : filteredAssists.slice(0, 5);
+  const displayedContributions =
+    showAllContributions || searchQuery ? filteredContributions : filteredContributions.slice(0, 5);
 
   return (
     <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-300">
@@ -65,7 +93,7 @@ export const StatsView: React.FC = () => {
               </h1>
             </div>
             <p className="text-xs sm:text-sm text-slate-400">
-              Artilharia detalhada, líderes em assistências, melhores ataques e defesas de todas as 48 equipes.
+              Gols acumulados (inclusive multi-equipes), assistências, participações totais, ataques e defesas. Clique em qualquer jogador ou equipe para ver seu perfil completo.
             </p>
           </div>
 
@@ -105,80 +133,132 @@ export const StatsView: React.FC = () => {
         </div>
       </div>
 
-      {/* 1. ARTILHARIA TAB */}
+      {/* 1. GOLS TAB (Chuteira de Ouro — Artilharia) */}
       {activeTab === 'scorers' && (
         <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-xl space-y-4 p-5 sm:p-6">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2">
               <Crown className="w-5 h-5 text-amber-400" />
-              <h2 className="text-base font-extrabold text-white">Chuteira de Ouro — Artilharia</h2>
+              <div>
+                <h2 className="text-base font-extrabold text-white">Chuteira de Ouro — Artilharia</h2>
+                <p className="text-[11px] text-slate-400">Gols somados de todas as equipes que o atleta defendeu</p>
+              </div>
             </div>
-            <span className="text-xs text-slate-400 font-mono">
-              {filteredScorers.length} goleadores registrados
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 font-mono">
+                {filteredScorers.length} goleadores
+              </span>
+            </div>
           </div>
 
           {filteredScorers.length === 0 ? (
             <div className="py-12 text-center text-sm text-slate-500 space-y-2">
               <p>Nenhum gol registrado individualmente com nome de jogador até o momento.</p>
               <p className="text-xs text-slate-600">
-                Ao registrar os jogos, adicione os autores dos gols para alimentar a artilharia automaticamente!
+                Ao registrar os jogos, adicione os autores dos gols para alimentar a tabela de gols automaticamente!
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-900/80 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                    <th className="py-3 px-3 w-12 text-center">Rank</th>
-                    <th className="py-3 px-3">Jogador</th>
-                    <th className="py-3 px-3">Equipe</th>
-                    <th className="py-3 px-3 text-center">Jogos Disputados</th>
-                    <th className="py-3 px-3 text-center">Assistências</th>
-                    <th className="py-3 px-3 text-center font-extrabold text-emerald-400">
-                      Gols Marcados
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60">
-                  {filteredScorers.map((p, idx) => (
-                    <tr key={`${p.player}_${p.team}`} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-3 text-center">
-                        <span
-                          className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-mono font-bold ${
-                            idx === 0
-                              ? 'bg-amber-400/20 text-amber-300 border border-amber-400/50'
-                              : idx === 1
-                              ? 'bg-slate-300/20 text-slate-200 border border-slate-300/50'
-                              : idx === 2
-                              ? 'bg-amber-700/20 text-amber-600 border border-amber-700/50'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}
-                        >
-                          {idx + 1}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className="text-sm font-bold text-white">{p.player}</span>
-                      </td>
-                      <td className="py-3 px-3">
-                        <TeamBadge name={p.team} size="sm" showFullName={true} />
-                      </td>
-                      <td className="py-3 px-3 text-center font-mono text-slate-400">
-                        {p.matchesCount}
-                      </td>
-                      <td className="py-3 px-3 text-center font-mono text-slate-300">
-                        {p.assists}
-                      </td>
-                      <td className="py-3 px-3 text-center">
-                        <span className="font-mono text-base font-extrabold text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-lg border border-emerald-500/20">
-                          {p.goals}
-                        </span>
-                      </td>
+            <div className="space-y-4">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900/80 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                      <th className="py-3 px-3 w-12 text-center">Rank</th>
+                      <th className="py-3 px-3">Jogador</th>
+                      <th className="py-3 px-3">Equipe(s)</th>
+                      <th className="py-3 px-3 text-center">Média por Jogo</th>
+                      <th className="py-3 px-3 text-center font-extrabold text-emerald-400">
+                        Gols Marcados
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {displayedScorers.map((p, idx) => (
+                      <tr
+                        key={p.player}
+                        className="hover:bg-slate-800/40 transition-colors group cursor-pointer"
+                        onClick={() => setSelectedPlayerName(p.player)}
+                      >
+                        <td className="py-3 px-3 text-center">
+                          <span
+                            className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-mono font-bold ${
+                              idx === 0
+                                ? 'bg-amber-400/20 text-amber-300 border border-amber-400/50'
+                                : idx === 1
+                                ? 'bg-slate-300/20 text-slate-200 border border-slate-300/50'
+                                : idx === 2
+                                ? 'bg-amber-700/20 text-amber-600 border border-amber-700/50'
+                                : 'bg-slate-800 text-slate-400'
+                            }`}
+                          >
+                            {idx + 1}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-white group-hover:text-emerald-300 transition-colors flex items-center gap-1.5">
+                              {p.player}
+                              {p.teams.length > 1 && (
+                                <span className="text-[9px] font-bold text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/30">
+                                  Multi-time
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-[10px] text-slate-500">Clique para abrir perfil</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {p.teams.map(t => (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => setSelectedTeamName(t)}
+                                className="hover:scale-105 transition-transform"
+                                title={`Ver perfil de ${t}`}
+                              >
+                                <TeamBadge name={t} size="sm" showFullName={true} />
+                              </button>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono text-slate-300">
+                          {p.avgGoals} / jogo
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <span className="font-mono text-base font-extrabold text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-lg border border-emerald-500/20">
+                            {p.goals}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Ver tudo / Ver Menos Button */}
+              {filteredScorers.length > 5 && !searchQuery && (
+                <div className="flex justify-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllScorers(!showAllScorers)}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all border border-slate-700 flex items-center gap-2 shadow-sm"
+                  >
+                    {showAllScorers ? (
+                      <>
+                        <ChevronUp className="w-4 h-4 text-emerald-400" />
+                        Mostrar apenas o TOP 5
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4 text-emerald-400" />
+                        Ver tudo ({filteredScorers.length} goleadores)
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -190,10 +270,13 @@ export const StatsView: React.FC = () => {
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2">
               <Target className="w-5 h-5 text-cyan-400" />
-              <h2 className="text-base font-extrabold text-white">Líderes em Assistências</h2>
+              <div>
+                <h2 className="text-base font-extrabold text-white">Líderes em Assistências</h2>
+                <p className="text-[11px] text-slate-400">Passes para gol somados em todas as equipes do atleta</p>
+              </div>
             </div>
             <span className="text-xs text-slate-400 font-mono">
-              {filteredAssists.length} garçons registrados
+              {filteredAssists.length} garçons
             </span>
           </div>
 
@@ -202,49 +285,236 @@ export const StatsView: React.FC = () => {
               Nenhuma assistência registrada nos gols ainda.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-900/80 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                    <th className="py-3 px-3 w-12 text-center">Rank</th>
-                    <th className="py-3 px-3">Jogador</th>
-                    <th className="py-3 px-3">Equipe</th>
-                    <th className="py-3 px-3 text-center">Gols Marcados</th>
-                    <th className="py-3 px-3 text-center font-extrabold text-cyan-400">
-                      Assistências
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60">
-                  {filteredAssists.map((p, idx) => (
-                    <tr key={`${p.player}_${p.team}`} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-3 text-center">
-                        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-mono font-bold bg-slate-800 text-slate-300">
-                          {idx + 1}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className="text-sm font-bold text-white">{p.player}</span>
-                      </td>
-                      <td className="py-3 px-3">
-                        <TeamBadge name={p.team} size="sm" showFullName={true} />
-                      </td>
-                      <td className="py-3 px-3 text-center font-mono text-slate-400">{p.goals}</td>
-                      <td className="py-3 px-3 text-center">
-                        <span className="font-mono text-base font-extrabold text-cyan-400 bg-cyan-500/10 px-3 py-1 rounded-lg border border-cyan-500/20">
-                          {p.assists}
-                        </span>
-                      </td>
+            <div className="space-y-4">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900/80 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                      <th className="py-3 px-3 w-12 text-center">Rank</th>
+                      <th className="py-3 px-3">Jogador</th>
+                      <th className="py-3 px-3">Equipe(s)</th>
+                      <th className="py-3 px-3 text-center">Média por Jogo</th>
+                      <th className="py-3 px-3 text-center font-extrabold text-cyan-400">
+                        Assistências
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {displayedAssists.map((p, idx) => (
+                      <tr
+                        key={p.player}
+                        className="hover:bg-slate-800/40 transition-colors group cursor-pointer"
+                        onClick={() => setSelectedPlayerName(p.player)}
+                      >
+                        <td className="py-3 px-3 text-center">
+                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-mono font-bold bg-slate-800 text-slate-300">
+                            {idx + 1}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors flex items-center gap-1.5">
+                              {p.player}
+                              {p.teams.length > 1 && (
+                                <span className="text-[9px] font-bold text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/30">
+                                  Multi-time
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-[10px] text-slate-500">Clique para abrir perfil</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {p.teams.map(t => (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => setSelectedTeamName(t)}
+                                className="hover:scale-105 transition-transform"
+                                title={`Ver perfil de ${t}`}
+                              >
+                                <TeamBadge name={t} size="sm" showFullName={true} />
+                              </button>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono text-slate-300">
+                          {p.avgAssists} / jogo
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <span className="font-mono text-base font-extrabold text-cyan-400 bg-cyan-500/10 px-3 py-1 rounded-lg border border-cyan-500/20">
+                            {p.assists}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Ver tudo / Ver Menos Button */}
+              {filteredAssists.length > 5 && !searchQuery && (
+                <div className="flex justify-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllAssists(!showAllAssists)}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all border border-slate-700 flex items-center gap-2 shadow-sm"
+                  >
+                    {showAllAssists ? (
+                      <>
+                        <ChevronUp className="w-4 h-4 text-cyan-400" />
+                        Mostrar apenas o TOP 5
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4 text-cyan-400" />
+                        Ver tudo ({filteredAssists.length} garçons)
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* 3. MELHORES ATAQUES TAB */}
+      {/* 3. PARTICIPAÇÕES EM GOLS TAB */}
+      {activeTab === 'contributions' && (
+        <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-xl space-y-4 p-5 sm:p-6">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-amber-400" />
+              <div>
+                <h2 className="text-base font-extrabold text-white">Participações em Gols</h2>
+                <p className="text-[11px] text-slate-400">Total somado de gols + assistências por jogador</p>
+              </div>
+            </div>
+            <span className="text-xs text-slate-400 font-mono">
+              {filteredContributions.length} atletas com participações
+            </span>
+          </div>
+
+          {filteredContributions.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-500">
+              Nenhuma participação direta em gols registrada até o momento.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900/80 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                      <th className="py-3 px-3 w-12 text-center">Rank</th>
+                      <th className="py-3 px-3">Jogador</th>
+                      <th className="py-3 px-3">Equipe(s)</th>
+                      <th className="py-3 px-3 text-center">Gols</th>
+                      <th className="py-3 px-3 text-center">Assistências</th>
+                      <th className="py-3 px-3 text-center">Média por Jogo</th>
+                      <th className="py-3 px-3 text-center font-extrabold text-amber-400">
+                        Participações (G+A)
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {displayedContributions.map((p, idx) => (
+                      <tr
+                        key={p.player}
+                        className="hover:bg-slate-800/40 transition-colors group cursor-pointer"
+                        onClick={() => setSelectedPlayerName(p.player)}
+                      >
+                        <td className="py-3 px-3 text-center">
+                          <span
+                            className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-mono font-bold ${
+                              idx === 0
+                                ? 'bg-amber-400/20 text-amber-300 border border-amber-400/50'
+                                : idx === 1
+                                ? 'bg-slate-300/20 text-slate-200 border border-slate-300/50'
+                                : idx === 2
+                                ? 'bg-amber-700/20 text-amber-600 border border-amber-700/50'
+                                : 'bg-slate-800 text-slate-400'
+                            }`}
+                          >
+                            {idx + 1}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-white group-hover:text-amber-300 transition-colors flex items-center gap-1.5">
+                              {p.player}
+                              {p.teams.length > 1 && (
+                                <span className="text-[9px] font-bold text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/30">
+                                  Multi-time
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-[10px] text-slate-500">Clique para abrir perfil</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {p.teams.map(t => (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => setSelectedTeamName(t)}
+                                className="hover:scale-105 transition-transform"
+                                title={`Ver perfil de ${t}`}
+                              >
+                                <TeamBadge name={t} size="sm" showFullName={true} />
+                              </button>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono font-bold text-emerald-400">
+                          {p.goals}
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono font-bold text-cyan-400">
+                          {p.assists}
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono text-slate-300">
+                          {p.avgContributions} / jogo
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <span className="font-mono text-base font-extrabold text-amber-400 bg-amber-500/10 px-3 py-1 rounded-lg border border-amber-500/20">
+                            {p.contributions}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Ver tudo / Ver Menos Button */}
+              {filteredContributions.length > 5 && !searchQuery && (
+                <div className="flex justify-center pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllContributions(!showAllContributions)}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all border border-slate-700 flex items-center gap-2 shadow-sm"
+                  >
+                    {showAllContributions ? (
+                      <>
+                        <ChevronUp className="w-4 h-4 text-amber-400" />
+                        Mostrar apenas o TOP 5
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4 text-amber-400" />
+                        Ver tudo ({filteredContributions.length} jogadores)
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 4. MELHORES ATAQUES TAB */}
       {activeTab === 'teams_attack' && (
         <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-xl space-y-4 p-5 sm:p-6">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -272,12 +542,21 @@ export const StatsView: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-800/60">
                 {mostGoals.map((t, idx) => (
-                  <tr key={t.team} className="hover:bg-slate-800/40 transition-colors">
+                  <tr
+                    key={t.team}
+                    className="hover:bg-slate-800/40 transition-colors cursor-pointer group"
+                    onClick={() => setSelectedTeamName(t.team)}
+                  >
                     <td className="py-3 px-3 text-center font-mono font-bold text-slate-400">
                       {idx + 1}º
                     </td>
                     <td className="py-3 px-3">
-                      <TeamBadge name={t.team} size="sm" showFullName={true} />
+                      <div className="flex items-center gap-2">
+                        <TeamBadge name={t.team} size="sm" showFullName={true} />
+                        <span className="text-[10px] text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                          (ver perfil)
+                        </span>
+                      </div>
                     </td>
                     <td className="py-3 px-3 text-center font-mono font-bold text-slate-300">
                       Grupo {t.group}
@@ -304,7 +583,7 @@ export const StatsView: React.FC = () => {
         </div>
       )}
 
-      {/* 4. MELHORES DEFESAS TAB */}
+      {/* 5. MELHORES DEFESAS TAB */}
       {activeTab === 'teams_defense' && (
         <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-xl space-y-4 p-5 sm:p-6">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -332,12 +611,21 @@ export const StatsView: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-800/60">
                 {leastConceded.map((t, idx) => (
-                  <tr key={t.team} className="hover:bg-slate-800/40 transition-colors">
+                  <tr
+                    key={t.team}
+                    className="hover:bg-slate-800/40 transition-colors cursor-pointer group"
+                    onClick={() => setSelectedTeamName(t.team)}
+                  >
                     <td className="py-3 px-3 text-center font-mono font-bold text-slate-400">
                       {idx + 1}º
                     </td>
                     <td className="py-3 px-3">
-                      <TeamBadge name={t.team} size="sm" showFullName={true} />
+                      <div className="flex items-center gap-2">
+                        <TeamBadge name={t.team} size="sm" showFullName={true} />
+                        <span className="text-[10px] text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                          (ver perfil)
+                        </span>
+                      </div>
                     </td>
                     <td className="py-3 px-3 text-center font-mono font-bold text-slate-300">
                       Grupo {t.group}
@@ -360,7 +648,7 @@ export const StatsView: React.FC = () => {
         </div>
       )}
 
-      {/* 5. TABELA GERAL DOS 48 TIMES */}
+      {/* 6. TABELA GERAL DOS 48 TIMES */}
       {activeTab === 'all_teams' && (
         <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-xl space-y-4 p-5 sm:p-6">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -396,9 +684,18 @@ export const StatsView: React.FC = () => {
                   const winRate = maxPossiblePts > 0 ? Math.round((t.points / maxPossiblePts) * 100) : 0;
 
                   return (
-                    <tr key={t.team} className="hover:bg-slate-800/40 transition-colors">
+                    <tr
+                      key={t.team}
+                      className="hover:bg-slate-800/40 transition-colors cursor-pointer group"
+                      onClick={() => setSelectedTeamName(t.team)}
+                    >
                       <td className="py-3 px-3">
-                        <TeamBadge name={t.team} size="sm" showFullName={true} />
+                        <div className="flex items-center gap-2">
+                          <TeamBadge name={t.team} size="sm" showFullName={true} />
+                          <span className="text-[10px] text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                            (ver perfil)
+                          </span>
+                        </div>
                       </td>
                       <td className="py-3 px-2 text-center font-mono font-bold text-slate-300">
                         Grupo {t.group}

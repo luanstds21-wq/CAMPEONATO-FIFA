@@ -7,6 +7,8 @@ import { MatchesView } from './components/MatchesView';
 import { BracketView } from './components/BracketView';
 import { StatsView } from './components/StatsView';
 import { MatchModal } from './components/MatchModal';
+import { PlayerProfileModal } from './components/PlayerProfileModal';
+import { TeamProfileModal } from './components/TeamProfileModal';
 import { Match } from './types/tournament';
 import { Gamepad2, Heart, Shield, Trophy } from 'lucide-react';
 
@@ -62,6 +64,10 @@ function TournamentApp() {
           setSelectedMatch(null);
         }}
       />
+
+      {/* Interactive Player and Team Profile Modals */}
+      <PlayerProfileModal />
+      <TeamProfileModal />
 
       {/* Footer */}
       <footer className="mt-auto border-t border-slate-800/80 bg-[#080d18] py-6 px-4">

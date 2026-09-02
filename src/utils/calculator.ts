@@ -1,5 +1,13 @@
 import { GROUPS, KNOCKOUT_DEFINITIONS } from '../data/initialData';
-import { GroupStanding, Match, PlayerStat, TeamStat } from '../types/tournament';
+import {
+  GroupStanding,
+  Match,
+  PlayerProfile,
+  PlayerStat,
+  PlayerTeamBreakdown,
+  TeamProfile,
+  TeamStat,
+} from '../types/tournament';
 
 // Calculate group standings for all 12 groups
 export function calculateGroupStandings(matches: Match[]): Record<string, GroupStanding[]> {
@@ -270,60 +278,407 @@ export function resolveKnockoutMatches(
   return resolvedMatches;
 }
 
-// Calculate top scorers and top assists across all matches (group + knockout)
+// Calculate top scorers, top assists, and top goal contributions across all matches (group + knockout)
+// Aggregates stats by player NAME across all teams they played for!
 export function calculatePlayerStats(matches: Match[]): {
   topScorers: PlayerStat[];
   topAssists: PlayerStat[];
+  topContributions: PlayerStat[];
 } {
-  const playersMap = new Map<string, { player: string; team: string; goals: number; assists: number }>();
+  // Count finished matches per team to accurately calculate average per game
+  const finishedMatchesByTeam = new Map<string, number>();
+  for (const m of matches) {
+    if (m.isFinished) {
+      finishedMatchesByTeam.set(m.homeTeam, (finishedMatchesByTeam.get(m.homeTeam) || 0) + 1);
+      finishedMatchesByTeam.set(m.awayTeam, (finishedMatchesByTeam.get(m.awayTeam) || 0) + 1);
+    }
+  }
 
-  function getPlayerKey(name: string, team: string) {
-    return `${name.trim().toLowerCase()}_${team.trim().toLowerCase()}`;
+  // Player aggregation map keyed by lowercased player name
+  const playersMap = new Map<
+    string,
+    {
+      name: string;
+      teams: Set<string>;
+      teamStats: Map<string, { goals: number; assists: number }>;
+      goals: number;
+      assists: number;
+    }
+  >();
+
+  function getOrCreatePlayer(name: string) {
+    const key = name.trim().toLowerCase();
+    if (!playersMap.has(key)) {
+      playersMap.set(key, {
+        name: name.trim(),
+        teams: new Set<string>(),
+        teamStats: new Map<string, { goals: number; assists: number }>(),
+        goals: 0,
+        assists: 0,
+      });
+    }
+    return playersMap.get(key)!;
   }
 
   for (const m of matches) {
-    if (!m.isFinished || !m.goals) continue;
+    if (!m.isFinished || !Array.isArray(m.goals)) continue;
 
     for (const g of m.goals) {
       if (g.player && g.player.trim()) {
         const pName = g.player.trim();
-        const pKey = getPlayerKey(pName, g.team);
-        if (!playersMap.has(pKey)) {
-          playersMap.set(pKey, { player: pName, team: g.team, goals: 0, assists: 0 });
+        const teamName = g.team ? g.team.trim() : '';
+        const entry = getOrCreatePlayer(pName);
+        entry.goals += 1;
+        if (teamName) {
+          entry.teams.add(teamName);
+          if (!entry.teamStats.has(teamName)) {
+            entry.teamStats.set(teamName, { goals: 0, assists: 0 });
+          }
+          entry.teamStats.get(teamName)!.goals += 1;
         }
-        playersMap.get(pKey)!.goals += 1;
       }
 
       if (g.assistPlayer && g.assistPlayer.trim()) {
         const aName = g.assistPlayer.trim();
-        const aKey = getPlayerKey(aName, g.team);
-        if (!playersMap.has(aKey)) {
-          playersMap.set(aKey, { player: aName, team: g.team, goals: 0, assists: 0 });
+        const teamName = g.team ? g.team.trim() : '';
+        const entry = getOrCreatePlayer(aName);
+        entry.assists += 1;
+        if (teamName) {
+          entry.teams.add(teamName);
+          if (!entry.teamStats.has(teamName)) {
+            entry.teamStats.set(teamName, { goals: 0, assists: 0 });
+          }
+          entry.teamStats.get(teamName)!.assists += 1;
         }
-        playersMap.get(aKey)!.assists += 1;
       }
     }
   }
 
-  const allPlayers = Array.from(playersMap.values());
+  const allPlayers: PlayerStat[] = Array.from(playersMap.values()).map(p => {
+    const teamsList = Array.from(p.teams);
+    // Matches played is the sum of finished matches of all teams this player played for
+    const matchesPlayed = teamsList.reduce(
+      (acc, t) => acc + (finishedMatchesByTeam.get(t) || 0),
+      0
+    );
 
-  const topScorers = allPlayers
+    const contributions = p.goals + p.assists;
+    const avgGoals = matchesPlayed > 0 ? Number((p.goals / matchesPlayed).toFixed(2)) : 0;
+    const avgAssists = matchesPlayed > 0 ? Number((p.assists / matchesPlayed).toFixed(2)) : 0;
+    const avgContributions = matchesPlayed > 0 ? Number((contributions / matchesPlayed).toFixed(2)) : 0;
+
+    const byTeam: PlayerTeamBreakdown[] = teamsList.map(t => {
+      const tStat = p.teamStats.get(t) || { goals: 0, assists: 0 };
+      const tMatches = finishedMatchesByTeam.get(t) || 0;
+      const tContrib = tStat.goals + tStat.assists;
+      return {
+        team: t,
+        goals: tStat.goals,
+        assists: tStat.assists,
+        contributions: tContrib,
+        matchesPlayed: tMatches,
+        avgGoals: tMatches > 0 ? Number((tStat.goals / tMatches).toFixed(2)) : 0,
+        avgAssists: tMatches > 0 ? Number((tStat.assists / tMatches).toFixed(2)) : 0,
+      };
+    });
+
+    return {
+      player: p.name,
+      team: teamsList.length > 0 ? teamsList.join(' / ') : 'Sem equipe',
+      teams: teamsList,
+      goals: p.goals,
+      assists: p.assists,
+      contributions,
+      matchesPlayed,
+      avgGoals,
+      avgAssists,
+      avgContributions,
+      byTeam,
+    };
+  });
+
+  const topScorers = [...allPlayers]
     .filter(p => p.goals > 0)
     .sort((a, b) => {
       if (b.goals !== a.goals) return b.goals - a.goals;
+      if (b.avgGoals !== a.avgGoals) return b.avgGoals - a.avgGoals;
       if (b.assists !== a.assists) return b.assists - a.assists;
       return a.player.localeCompare(b.player);
     });
 
-  const topAssists = allPlayers
+  const topAssists = [...allPlayers]
     .filter(p => p.assists > 0)
     .sort((a, b) => {
       if (b.assists !== a.assists) return b.assists - a.assists;
+      if (b.avgAssists !== a.avgAssists) return b.avgAssists - a.avgAssists;
       if (b.goals !== a.goals) return b.goals - a.goals;
       return a.player.localeCompare(b.player);
     });
 
-  return { topScorers, topAssists };
+  const topContributions = [...allPlayers]
+    .filter(p => p.contributions > 0)
+    .sort((a, b) => {
+      if (b.contributions !== a.contributions) return b.contributions - a.contributions;
+      if (b.goals !== a.goals) return b.goals - a.goals;
+      if (b.avgContributions !== a.avgContributions) return b.avgContributions - a.avgContributions;
+      return a.player.localeCompare(b.player);
+    });
+
+  return { topScorers, topAssists, topContributions };
+}
+
+// Generate individual Player Profile with full match records and breakdown by team
+export function getPlayerProfile(playerName: string, matches: Match[]): PlayerProfile | null {
+  if (!playerName || !playerName.trim()) return null;
+  const targetKey = playerName.trim().toLowerCase();
+
+  const goalEvents: PlayerProfile['goalEvents'] = [];
+  const assistEvents: PlayerProfile['assistEvents'] = [];
+  const teamsSet = new Set<string>();
+  let canonicalName = playerName.trim();
+
+  // Finished matches per team
+  const finishedMatchesByTeam = new Map<string, number>();
+  for (const m of matches) {
+    if (m.isFinished) {
+      finishedMatchesByTeam.set(m.homeTeam, (finishedMatchesByTeam.get(m.homeTeam) || 0) + 1);
+      finishedMatchesByTeam.set(m.awayTeam, (finishedMatchesByTeam.get(m.awayTeam) || 0) + 1);
+    }
+  }
+
+  for (const m of matches) {
+    if (!m.isFinished || !Array.isArray(m.goals)) continue;
+
+    for (const g of m.goals) {
+      if (g.player && g.player.trim().toLowerCase() === targetKey) {
+        canonicalName = g.player.trim();
+        if (g.team) teamsSet.add(g.team);
+        const opponent = g.team === m.homeTeam ? m.awayTeam : m.homeTeam;
+        goalEvents.push({
+          matchId: m.id,
+          roundLabel: m.roundLabel,
+          stage: m.stage,
+          team: g.team,
+          opponent,
+          homeTeam: m.homeTeam,
+          awayTeam: m.awayTeam,
+          homeScore: m.homeScore,
+          awayScore: m.awayScore,
+          minute: g.minute,
+          assistPlayer: g.assistPlayer,
+        });
+      }
+
+      if (g.assistPlayer && g.assistPlayer.trim().toLowerCase() === targetKey) {
+        canonicalName = g.assistPlayer.trim();
+        if (g.team) teamsSet.add(g.team);
+        const opponent = g.team === m.homeTeam ? m.awayTeam : m.homeTeam;
+        assistEvents.push({
+          matchId: m.id,
+          roundLabel: m.roundLabel,
+          stage: m.stage,
+          team: g.team,
+          opponent,
+          homeTeam: m.homeTeam,
+          awayTeam: m.awayTeam,
+          homeScore: m.homeScore,
+          awayScore: m.awayScore,
+          minute: g.minute,
+          scorer: g.player,
+        });
+      }
+    }
+  }
+
+  const teams = Array.from(teamsSet);
+  if (teams.length === 0 && goalEvents.length === 0 && assistEvents.length === 0) {
+    return null;
+  }
+
+  const totalGoals = goalEvents.length;
+  const totalAssists = assistEvents.length;
+  const totalContributions = totalGoals + totalAssists;
+  const matchesPlayed = teams.reduce((acc, t) => acc + (finishedMatchesByTeam.get(t) || 0), 0);
+
+  const avgGoals = matchesPlayed > 0 ? Number((totalGoals / matchesPlayed).toFixed(2)) : 0;
+  const avgAssists = matchesPlayed > 0 ? Number((totalAssists / matchesPlayed).toFixed(2)) : 0;
+  const avgContributions = matchesPlayed > 0 ? Number((totalContributions / matchesPlayed).toFixed(2)) : 0;
+
+  const byTeam: PlayerTeamBreakdown[] = teams.map(t => {
+    const tGoals = goalEvents.filter(e => e.team === t).length;
+    const tAssists = assistEvents.filter(e => e.team === t).length;
+    const tContrib = tGoals + tAssists;
+    const tMatches = finishedMatchesByTeam.get(t) || 0;
+    return {
+      team: t,
+      goals: tGoals,
+      assists: tAssists,
+      contributions: tContrib,
+      matchesPlayed: tMatches,
+      avgGoals: tMatches > 0 ? Number((tGoals / tMatches).toFixed(2)) : 0,
+      avgAssists: tMatches > 0 ? Number((tAssists / tMatches).toFixed(2)) : 0,
+    };
+  }).sort((a, b) => b.goals - a.goals || b.assists - a.assists);
+
+  return {
+    name: canonicalName,
+    teams,
+    primaryTeam: teams[0] || '',
+    goals: totalGoals,
+    assists: totalAssists,
+    contributions: totalContributions,
+    matchesPlayed,
+    avgGoals,
+    avgAssists,
+    avgContributions,
+    byTeam,
+    goalEvents: goalEvents.sort((a, b) => a.matchId - b.matchId || a.minute - b.minute),
+    assistEvents: assistEvents.sort((a, b) => a.matchId - b.matchId || a.minute - b.minute),
+  };
+}
+
+// Generate comprehensive Team Profile with complete match records and team top scorers
+export function getTeamProfile(
+  teamName: string,
+  matches: Match[],
+  groupStandings: Record<string, GroupStanding[]>
+): TeamProfile | null {
+  if (!teamName || !teamName.trim()) return null;
+  const tName = teamName.trim();
+
+  // Find team group
+  let group = '';
+  for (const [grp, teams] of Object.entries(GROUPS)) {
+    if (teams.includes(tName)) {
+      group = grp;
+      break;
+    }
+  }
+
+  // Matches involving this team
+  const teamMatches = matches.filter(
+    m => m.homeTeam === tName || m.awayTeam === tName
+  );
+
+  let played = 0;
+  let won = 0;
+  let drawn = 0;
+  let lost = 0;
+  let goalsFor = 0;
+  let goalsAgainst = 0;
+  let points = 0;
+
+  const matchSummaries: TeamProfile['matches'] = [];
+  const scorerMap = new Map<string, { player: string; goals: number; assists: number }>();
+
+  for (const m of teamMatches) {
+    const isHome = m.homeTeam === tName;
+    const opponent = isHome ? m.awayTeam : m.homeTeam;
+
+    if (m.isFinished && m.homeScore !== undefined && m.awayScore !== undefined) {
+      played += 1;
+      const scored = isHome ? m.homeScore : m.awayScore;
+      const conceded = isHome ? m.awayScore : m.homeScore;
+      goalsFor += scored;
+      goalsAgainst += conceded;
+
+      let result: 'win' | 'draw' | 'loss' = 'draw';
+      if (m.stage === 'group') {
+        if (scored > conceded) {
+          result = 'win';
+          won += 1;
+          points += 3;
+        } else if (scored < conceded) {
+          result = 'loss';
+          lost += 1;
+        } else {
+          result = 'draw';
+          drawn += 1;
+          points += 1;
+        }
+      } else {
+        // Knockout
+        if (m.winnerTeam === tName) {
+          result = 'win';
+          won += 1;
+          points += 3;
+        } else {
+          result = 'loss';
+          lost += 1;
+        }
+      }
+
+      const teamGoals = (m.goals || []).filter(g => g.team === tName);
+      for (const g of teamGoals) {
+        if (g.player && g.player.trim()) {
+          const p = g.player.trim();
+          const pKey = p.toLowerCase();
+          if (!scorerMap.has(pKey)) {
+            scorerMap.set(pKey, { player: p, goals: 0, assists: 0 });
+          }
+          scorerMap.get(pKey)!.goals += 1;
+        }
+        if (g.assistPlayer && g.assistPlayer.trim()) {
+          const a = g.assistPlayer.trim();
+          const aKey = a.toLowerCase();
+          if (!scorerMap.has(aKey)) {
+            scorerMap.set(aKey, { player: a, goals: 0, assists: 0 });
+          }
+          scorerMap.get(aKey)!.assists += 1;
+        }
+      }
+
+      matchSummaries.push({
+        match: m,
+        opponent,
+        isHome,
+        result,
+        scoreText: `${scored} × ${conceded}`,
+        teamGoals,
+      });
+    } else {
+      matchSummaries.push({
+        match: m,
+        opponent,
+        isHome,
+        result: 'pending',
+        scoreText: 'A disputar',
+        teamGoals: [],
+      });
+    }
+  }
+
+  const goalDifference = goalsFor - goalsAgainst;
+  const avgGoalsFor = played > 0 ? Number((goalsFor / played).toFixed(2)) : 0;
+  const avgGoalsAgainst = played > 0 ? Number((goalsAgainst / played).toFixed(2)) : 0;
+  const winRate = played > 0 ? Math.round((won / played) * 100) : 0;
+
+  const scorers = Array.from(scorerMap.values())
+    .map(s => ({
+      player: s.player,
+      goals: s.goals,
+      assists: s.assists,
+      contributions: s.goals + s.assists,
+    }))
+    .sort((a, b) => b.goals - a.goals || b.assists - a.assists || a.player.localeCompare(b.player));
+
+  return {
+    team: tName,
+    group: group || 'Mata-mata',
+    played,
+    won,
+    drawn,
+    lost,
+    goalsFor,
+    goalsAgainst,
+    goalDifference,
+    points,
+    avgGoalsFor,
+    avgGoalsAgainst,
+    winRate,
+    matches: matchSummaries,
+    scorers,
+  };
 }
 
 // Calculate comprehensive team stats for all 48 teams

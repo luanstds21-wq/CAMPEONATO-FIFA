@@ -18,7 +18,7 @@ import { GroupStanding } from '../types/tournament';
 import { TeamBadge } from './TeamBadge';
 
 export const StandingsView: React.FC = () => {
-  const { groupStandings, bestThirds } = useTournament();
+  const { groupStandings, bestThirds, setSelectedTeamName } = useTournament();
   const [selectedGroup, setSelectedGroup] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -182,7 +182,14 @@ export const StandingsView: React.FC = () => {
 
                           {/* Team Name with Badge */}
                           <td className="py-2.5 px-2">
-                            <TeamBadge name={row.team} size="sm" showFullName={true} />
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTeamName(row.team)}
+                              className="text-left hover:scale-102 transition-transform group/team"
+                              title={`Ver perfil do time ${row.team}`}
+                            >
+                              <TeamBadge name={row.team} size="sm" showFullName={true} />
+                            </button>
                           </td>
 
                           <td className="py-2.5 px-1.5 text-center font-mono text-slate-300">
@@ -296,14 +303,19 @@ export const StandingsView: React.FC = () => {
 
                     {/* Team with slot label */}
                     <td className="py-3 px-2">
-                      <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTeamName(row.team)}
+                        className="flex items-center gap-3 text-left hover:scale-102 transition-transform"
+                        title={`Ver perfil do time ${row.team}`}
+                      >
                         <TeamBadge name={row.team} size="sm" showFullName={true} />
                         {isQualified && (
                           <span className="text-[10px] bg-slate-800 text-emerald-300 font-mono px-2 py-0.5 rounded border border-emerald-500/20 hidden sm:inline">
                             {idx + 1}º Melhor Terceiro
                           </span>
                         )}
-                      </div>
+                      </button>
                     </td>
 
                     {/* Group */}

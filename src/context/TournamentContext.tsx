@@ -5,7 +5,9 @@ import {
   Goal,
   GroupStanding,
   Match,
+  PlayerProfile,
   PlayerStat,
+  TeamProfile,
   TeamStat,
 } from '../types/tournament';
 import {
@@ -13,6 +15,8 @@ import {
   calculateBestThirds,
   calculateGroupStandings,
   calculatePlayerStats,
+  getPlayerProfile as calcPlayerProfile,
+  getTeamProfile as calcTeamProfile,
   resolveKnockoutMatches,
 } from '../utils/calculator';
 
@@ -24,6 +28,7 @@ interface TournamentContextType {
   bestThirds: GroupStanding[];
   topScorers: PlayerStat[];
   topAssists: PlayerStat[];
+  topContributions: PlayerStat[];
   allTeamStats: TeamStat[];
   leastConceded: TeamStat[];
   mostGoals: TeamStat[];
@@ -32,6 +37,12 @@ interface TournamentContextType {
   knownPlayers: string[];
   totalMatchesPlayed: number;
   totalGoalsScored: number;
+  selectedPlayerName: string | null;
+  setSelectedPlayerName: (name: string | null) => void;
+  selectedTeamName: string | null;
+  setSelectedTeamName: (name: string | null) => void;
+  getPlayerProfile: (name: string) => PlayerProfile | null;
+  getTeamProfile: (name: string) => TeamProfile | null;
   saveMatch: (
     matchId: number,
     data: {
@@ -112,13 +123,25 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   }, [groupMatchesState, knockoutMatches]);
 
   // 5. Stats
-  const { topScorers, topAssists } = useMemo(() => {
+  const { topScorers, topAssists, topContributions } = useMemo(() => {
     return calculatePlayerStats(matches);
   }, [matches]);
 
   const { allTeamStats, leastConceded, mostGoals } = useMemo(() => {
     return calculateAllTeamStats(matches, groupStandings);
   }, [matches, groupStandings]);
+
+  // Profile selection state
+  const [selectedPlayerName, setSelectedPlayerName] = useState<string | null>(null);
+  const [selectedTeamName, setSelectedTeamName] = useState<string | null>(null);
+
+  const getPlayerProfile = (name: string) => {
+    return calcPlayerProfile(name, matches);
+  };
+
+  const getTeamProfile = (name: string) => {
+    return calcTeamProfile(name, matches, groupStandings);
+  };
 
   // 6. Next Matches
   const nextUnplayedMatch = useMemo(() => {
@@ -421,6 +444,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         bestThirds,
         topScorers,
         topAssists,
+        topContributions,
         allTeamStats,
         leastConceded,
         mostGoals,
@@ -429,6 +453,12 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         knownPlayers,
         totalMatchesPlayed,
         totalGoalsScored,
+        selectedPlayerName,
+        setSelectedPlayerName,
+        selectedTeamName,
+        setSelectedTeamName,
+        getPlayerProfile,
+        getTeamProfile,
         saveMatch,
         resetMatch,
         resetTournament,

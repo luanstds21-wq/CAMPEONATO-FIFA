@@ -58,11 +58,105 @@ export interface GroupStanding {
   bestThirdRank?: number; // 1 to 8 if among best 3rds
 }
 
-export interface PlayerStat {
-  player: string;
+export interface PlayerTeamBreakdown {
   team: string;
   goals: number;
   assists: number;
+  contributions: number;
+  matchesPlayed: number;
+  avgGoals: number;
+  avgAssists: number;
+}
+
+export interface PlayerGoalEvent {
+  matchId: number;
+  roundLabel: string;
+  stage: MatchStage;
+  team: string;
+  opponent: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeScore?: number;
+  awayScore?: number;
+  minute: number;
+  assistPlayer?: string;
+  isPenalty?: boolean;
+}
+
+export interface PlayerAssistEvent {
+  matchId: number;
+  roundLabel: string;
+  stage: MatchStage;
+  team: string;
+  opponent: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeScore?: number;
+  awayScore?: number;
+  minute: number;
+  scorer: string;
+}
+
+export interface PlayerProfile {
+  name: string;
+  teams: string[];
+  primaryTeam: string;
+  goals: number;
+  assists: number;
+  contributions: number;
+  matchesPlayed: number;
+  avgGoals: number;
+  avgAssists: number;
+  avgContributions: number;
+  byTeam: PlayerTeamBreakdown[];
+  goalEvents: PlayerGoalEvent[];
+  assistEvents: PlayerAssistEvent[];
+}
+
+export interface PlayerStat {
+  player: string;
+  team: string; // Ex: "Liverpool / Holanda" or single team
+  teams: string[]; // List of all teams
+  goals: number;
+  assists: number;
+  contributions: number;
+  matchesPlayed: number;
+  avgGoals: number;
+  avgAssists: number;
+  avgContributions: number;
+  byTeam?: PlayerTeamBreakdown[];
+}
+
+export interface TeamScorerItem {
+  player: string;
+  goals: number;
+  assists: number;
+  contributions: number;
+}
+
+export interface TeamProfile {
+  team: string;
+  group: string;
+  played: number;
+  won: number;
+  drawn: number;
+  lost: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  points: number;
+  avgGoalsFor: number;
+  avgGoalsAgainst: number;
+  winRate: number;
+  matches: Array<{
+    match: Match;
+    opponent: string;
+    isHome: boolean;
+    result: 'win' | 'draw' | 'loss' | 'pending';
+    scoreText: string;
+    teamGoals: Goal[];
+  }>;
+  scorers: TeamScorerItem[];
 }
 
 export interface TeamStat {

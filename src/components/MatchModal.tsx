@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Gamepad2,
   Minus,
+  Pencil,
   Plus,
   RotateCcw,
   Sparkles,
@@ -34,12 +35,13 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
   const [homePenalties, setHomePenalties] = useState<number>(0);
   const [awayPenalties, setAwayPenalties] = useState<number>(0);
 
-  // New goal entry state
+  // Goal entry and edit state
   const [goalMinute, setGoalMinute] = useState<number>(45);
   const [goalPlayer, setGoalPlayer] = useState<string>('');
   const [goalTeam, setGoalTeam] = useState<string>('');
   const [goalAssist, setGoalAssist] = useState<string>('');
   const [showGoalForm, setShowGoalForm] = useState<boolean>(false);
+  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
 
   // Autocomplete helpers
   const [playerSuggestions, setPlayerSuggestions] = useState<string[]>([]);
@@ -59,6 +61,7 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
       setGoalPlayer('');
       setGoalAssist('');
       setShowGoalForm(false);
+      setEditingGoalId(null);
     }
   }, [match]);
 
@@ -95,26 +98,70 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
     }
   };
 
-  // Add goal
+  // Start editing an existing goal
+  const handleStartEditGoal = (goal: Goal) => {
+    setEditingGoalId(goal.id);
+    setGoalMinute(goal.minute);
+    setGoalTeam(goal.team);
+    setGoalPlayer(goal.player);
+    setGoalAssist(goal.assistPlayer || '');
+    setPlayerSuggestions([]);
+    setAssistSuggestions([]);
+    setShowGoalForm(true);
+  };
+
+  // Cancel goal form (creation or edition)
+  const handleCancelGoalForm = () => {
+    setEditingGoalId(null);
+    setGoalPlayer('');
+    setGoalAssist('');
+    setGoalMinute(45);
+    setPlayerSuggestions([]);
+    setAssistSuggestions([]);
+    setShowGoalForm(false);
+  };
+
+  // Add or update goal
   const handleAddGoal = (e: React.FormEvent) => {
     e.preventDefault();
     if (!goalPlayer.trim()) return;
 
-    const newGoal: Goal = {
-      id: `goal_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-      minute: Math.max(1, Math.min(120, Number(goalMinute) || 1)),
-      player: goalPlayer.trim(),
-      team: goalTeam || match.homeTeam,
-      assistPlayer: goalAssist.trim() ? goalAssist.trim() : undefined,
-    };
+    let nextGoals: Goal[];
 
-    const nextGoals = [...goals, newGoal].sort((a, b) => a.minute - b.minute);
+    if (editingGoalId) {
+      // Editing existing goal
+      nextGoals = goals
+        .map(g => {
+          if (g.id === editingGoalId) {
+            return {
+              ...g,
+              minute: Math.max(1, Math.min(120, Number(goalMinute) || 1)),
+              player: goalPlayer.trim(),
+              team: goalTeam || match.homeTeam,
+              assistPlayer: goalAssist.trim() ? goalAssist.trim() : undefined,
+            };
+          }
+          return g;
+        })
+        .sort((a, b) => a.minute - b.minute);
+    } else {
+      // Adding new goal
+      const newGoal: Goal = {
+        id: `goal_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        minute: Math.max(1, Math.min(120, Number(goalMinute) || 1)),
+        player: goalPlayer.trim(),
+        team: goalTeam || match.homeTeam,
+        assistPlayer: goalAssist.trim() ? goalAssist.trim() : undefined,
+      };
+      nextGoals = [...goals, newGoal].sort((a, b) => a.minute - b.minute);
+    }
+
     setGoals(nextGoals);
 
     // Auto-update match score based on goals count if user hasn't set custom score
     const homeGoalsCount = nextGoals.filter(g => g.team === match.homeTeam).length;
     const awayGoalsCount = nextGoals.filter(g => g.team === match.awayTeam).length;
-    
+
     if (homeGoalsCount > homeScore) setHomeScore(homeGoalsCount);
     if (awayGoalsCount > awayScore) setAwayScore(awayGoalsCount);
 
@@ -127,15 +174,20 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
     }
 
     // Reset goal entry inputs
+    setEditingGoalId(null);
     setGoalPlayer('');
     setGoalAssist('');
     setGoalMinute(Math.min(90, (goalMinute + 15) % 95 || 45));
     setPlayerSuggestions([]);
     setAssistSuggestions([]);
+    setShowGoalForm(false);
   };
 
   // Remove goal
   const handleRemoveGoal = (goalId: string) => {
+    if (editingGoalId === goalId) {
+      handleCancelGoalForm();
+    }
     setGoals(goals.filter(g => g.id !== goalId));
   };
 
@@ -481,7 +533,14 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
 
               <button
                 type="button"
-                onClick={() => setShowGoalForm(!showGoalForm)}
+                onClick={() => {
+                  if (showGoalForm && !editingGoalId) {
+                    setShowGoalForm(false);
+                  } else {
+                    handleCancelGoalForm();
+                    setShowGoalForm(true);
+                  }
+                }}
                 className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -489,14 +548,31 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
               </button>
             </div>
 
-            {/* Add Goal Collapsible Form */}
+            {/* Add / Edit Goal Collapsible Form */}
             {showGoalForm && (
               <form
                 onSubmit={handleAddGoal}
                 className="bg-slate-800/90 border border-emerald-500/40 rounded-xl p-4 space-y-3 shadow-lg animate-in fade-in duration-200"
               >
-                <div className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
-                  Novo Registro de Gol
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                    {editingGoalId ? (
+                      <>
+                        <Pencil className="w-3.5 h-3.5" />
+                        Editando Gol Selecionado
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        Novo Registro de Gol
+                      </>
+                    )}
+                  </div>
+                  {editingGoalId && (
+                    <span className="text-[10px] font-semibold text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/30">
+                      Modo de Edição
+                    </span>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
@@ -625,16 +701,23 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
                 <div className="flex justify-end gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={() => setShowGoalForm(false)}
+                    onClick={handleCancelGoalForm}
                     className="px-3 py-1.5 text-xs text-slate-400 hover:text-white transition-colors"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs rounded-lg transition-colors shadow-md"
+                    className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs rounded-lg transition-colors shadow-md flex items-center gap-1.5"
                   >
-                    Salvar Gol
+                    {editingGoalId ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Atualizar Gol
+                      </>
+                    ) : (
+                      'Salvar Gol'
+                    )}
                   </button>
                 </div>
               </form>
@@ -650,10 +733,20 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
                 {goals.map(g => (
                   <div
                     key={g.id}
-                    className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-2.5 flex items-center justify-between gap-2 group hover:border-slate-600 transition-colors"
+                    className={`rounded-lg p-2.5 flex items-center justify-between gap-2 group transition-all ${
+                      editingGoalId === g.id
+                        ? 'bg-emerald-950/50 border-2 border-emerald-500 shadow-md shadow-emerald-500/10 ring-1 ring-emerald-500/50'
+                        : 'bg-slate-900/80 border border-slate-700/60 hover:border-slate-600'
+                    }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400 font-mono text-xs font-bold">
+                      <span
+                        className={`px-2 py-0.5 rounded font-mono text-xs font-bold ${
+                          editingGoalId === g.id
+                            ? 'bg-emerald-500 text-black'
+                            : 'bg-slate-800 border border-slate-700 text-emerald-400'
+                        }`}
+                      >
                         {g.minute}'
                       </span>
                       <div className="flex flex-col min-w-0">
@@ -662,6 +755,11 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
                           <span className="text-[10px] text-slate-400 font-medium">
                             ({g.team})
                           </span>
+                          {editingGoalId === g.id && (
+                            <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/20 px-1 py-0.2 rounded">
+                              editando
+                            </span>
+                          )}
                         </div>
                         {g.assistPlayer && (
                           <span className="text-[10px] text-slate-400 flex items-center gap-1 truncate">
@@ -671,14 +769,28 @@ export const MatchModal: React.FC<MatchModalProps> = ({ match, isOpen, onClose }
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveGoal(g.id)}
-                      className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors opacity-80 group-hover:opacity-100"
-                      title="Remover gol"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleStartEditGoal(g)}
+                        className={`p-1.5 rounded transition-colors ${
+                          editingGoalId === g.id
+                            ? 'text-emerald-300 bg-emerald-500/20'
+                            : 'text-slate-400 hover:text-emerald-400 hover:bg-slate-800'
+                        }`}
+                        title="Editar este gol"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveGoal(g.id)}
+                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors opacity-80 group-hover:opacity-100"
+                        title="Remover gol"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
