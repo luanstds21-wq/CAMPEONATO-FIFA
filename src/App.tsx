@@ -10,14 +10,14 @@ import { MatchModal } from './components/MatchModal';
 import { PlayerProfileModal } from './components/PlayerProfileModal';
 import { TeamProfileModal } from './components/TeamProfileModal';
 import { Match } from './types/tournament';
-import { Cloud, Gamepad2, Trophy, Users } from 'lucide-react';
+import { Gamepad2, Heart, Shield, Trophy } from 'lucide-react';
 
 function TournamentApp() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [selectedMatch, setSelectedMatch] = useState<Match | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const { matches, isLoadingTournament, syncStatus } = useTournament();
+  const { matches } = useTournament();
 
   const handleOpenMatch = (match: Match) => {
     setSelectedMatch(match);
@@ -39,30 +39,20 @@ function TournamentApp() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-6 sm:py-8">
-        {isLoadingTournament ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4" />
-            <div className="text-sm font-bold text-white">Carregando campeonato compartilhado...</div>
-            <div className="text-xs text-slate-400 mt-1">Conectando à base de dados online em tempo real</div>
-          </div>
-        ) : (
-          <>
-            {activeTab === 'dashboard' && (
-              <DashboardView
-                onOpenMatch={handleOpenMatch}
-                onNavigateTab={tab => setActiveTab(tab)}
-              />
-            )}
-
-            {activeTab === 'standings' && <StandingsView />}
-
-            {activeTab === 'matches' && <MatchesView onOpenMatch={handleOpenMatch} />}
-
-            {activeTab === 'bracket' && <BracketView onOpenMatch={handleOpenMatch} />}
-
-            {activeTab === 'stats' && <StatsView />}
-          </>
+        {activeTab === 'dashboard' && (
+          <DashboardView
+            onOpenMatch={handleOpenMatch}
+            onNavigateTab={tab => setActiveTab(tab)}
+          />
         )}
+
+        {activeTab === 'standings' && <StandingsView />}
+
+        {activeTab === 'matches' && <MatchesView onOpenMatch={handleOpenMatch} />}
+
+        {activeTab === 'bracket' && <BracketView onOpenMatch={handleOpenMatch} />}
+
+        {activeTab === 'stats' && <StatsView />}
       </main>
 
       {/* Match Result Recording Modal */}
@@ -89,17 +79,10 @@ function TournamentApp() {
           </div>
 
           <div className="flex items-center gap-4 text-[11px]">
-            <span className="flex items-center gap-1 text-slate-400">
+            <span className="flex items-center gap-1">
               <Gamepad2 className="w-3.5 h-3.5 text-emerald-400" /> Modo Jogo FIFA
             </span>
-            <span className="flex items-center gap-1 text-emerald-400 font-medium">
-              <Users className="w-3.5 h-3.5" />
-              Base de Dados Única Compartilhada
-            </span>
-            <span className="flex items-center gap-1 text-slate-400">
-              <Cloud className="w-3.5 h-3.5 text-teal-400" />
-              Tempo Real Ativo
-            </span>
+            <span>Salvamento Local Automático</span>
           </div>
         </div>
       </footer>
