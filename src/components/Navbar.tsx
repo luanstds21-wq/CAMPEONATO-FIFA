@@ -1,20 +1,27 @@
 import React, { useRef, useState } from 'react';
 import {
   BarChart3,
-  CalendarDays,
   CheckCircle2,
+  Cloud,
+  CloudOff,
   Database,
   Download,
   Flame,
   Gamepad2,
   Home,
+  LogOut,
   RefreshCw,
+  RotateCw,
+  Shield,
   Sparkles,
   Trophy,
   Upload,
+  User as UserIcon,
   X,
 } from 'lucide-react';
 import { useTournament } from '../context/TournamentContext';
+import { useAuth } from '../context/AuthContext';
+import { AuthModal } from './AuthModal';
 
 export type NavTab = 'dashboard' | 'standings' | 'matches' | 'stats' | 'bracket';
 
@@ -25,14 +32,26 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
-  const { totalMatchesPlayed, matches, exportData, importData, resetTournament, seedDemoData } =
-    useTournament();
+  const {
+    totalMatchesPlayed,
+    matches,
+    exportData,
+    importData,
+    resetTournament,
+    seedDemoData,
+    syncStatus,
+    lastSyncedAt,
+    refreshFromCloud,
+    isLoadingTournament,
+  } = useTournament();
+
+  const { user, isOnlineConfigured, signOut } = useAuth();
 
   const [showToolsModal, setShowToolsModal] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const totalMatchesCount = matches.length; // 103
   const progressPercent = Math.round((totalMatchesPlayed / 103) * 100);
 
   const navItems = [
@@ -49,7 +68,8 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `fifa_champions_48_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    const userSlug = user?.displayName ? user.displayName.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'campeonato';
+    a.download = `fifa_champions_48_${userSlug}_backup_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -66,44 +86,148 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
         setImportStatus('✅ Dados importados com sucesso!');
         setTimeout(() => setImportStatus(null), 3000);
       } else {
-        setImportStatus('❌ Arquivo inválido. Verifique o formato.');
+        setImportStatus('❌ Arquivo inválido. Verifique o formato do JSON.');
       }
     };
     reader.readAsText(file);
+    // Reset file input
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-[#0c1220]/95 backdrop-blur-md border-b border-slate-800">
-      {/* Top Main Navigation Bar */}
-      <div className="max-w-7xl mx-auto px-3 sm:px-6">
-        <div className="flex items-center justify-between h-16 gap-2">
-          {/* Brand Logo & Title */}
-          <div
-            onClick={() => setActiveTab('dashboard')}
-            className="flex items-center gap-3 cursor-pointer select-none group shrink-0"
-          >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 via-emerald-500 to-teal-400 p-0.5 shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform flex items-center justify-center">
-              <div className="w-full h-full bg-[#0b101b] rounded-[10px] flex items-center justify-center">
-                <Trophy className="w-5 h-5 text-emerald-400" />
+    <>
+      <header className="sticky top-0 z-40 bg-[#0c1220]/95 backdrop-blur-md border-b border-slate-800">
+        {/* Top Main Navigation Bar */}
+        <div className="max-w-7xl mx-auto px-3 sm:px-6">
+          <div className="flex items-center justify-between h-16 gap-2">
+            {/* Brand Logo & Title */}
+            <div
+              onClick={() => setActiveTab('dashboard')}
+              className="flex items-center gap-3 cursor-pointer select-none group shrink-0"
+            >
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 via-emerald-500 to-teal-400 p-0.5 shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform flex items-center justify-center">
+                <div className="w-full h-full bg-[#0b101b] rounded-[10px] flex items-center justify-center">
+                  <Trophy className="w-5 h-5 text-emerald-400" />
+                </div>
+              </div>
+              <div className="flex flex-col">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-extrabold tracking-tight text-white text-base sm:text-lg">
+                    FIFA <span className="text-emerald-400 font-mono">CHAMPIONS</span>
+                  </span>
+                  <span className="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    48 Times
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
+                  12 Grupos • Mata-Mata • Painel Pro
+                </span>
               </div>
             </div>
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1.5">
-                <span className="font-extrabold tracking-tight text-white text-base sm:text-lg">
-                  FIFA <span className="text-emerald-400 font-mono">CHAMPIONS</span>
-                </span>
-                <span className="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  48 Times
-                </span>
+
+            {/* Desktop Navigation Tabs */}
+            <nav className="hidden md:flex items-center gap-1 bg-slate-900/90 p-1.5 rounded-xl border border-slate-800">
+              {navItems.map(item => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveTab(item.id)}
+                    className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
+                      isActive
+                        ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/20 scale-[1.02]'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <Icon className={`w-4 h-4 ${isActive ? 'text-black' : 'text-slate-400'}`} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </nav>
+
+            {/* Quick Tools & User Profile */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Progress Tracker (Desktop) */}
+              <div className="hidden lg:flex flex-col items-end mr-1">
+                <div className="flex items-center gap-1.5 text-xs text-slate-300 font-medium">
+                  <span className="text-emerald-400 font-mono font-bold">{totalMatchesPlayed}</span>
+                  <span className="text-slate-500">/</span>
+                  <span className="font-mono">103 Jogos</span>
+                </div>
+                <div className="w-24 bg-slate-800 h-1.5 rounded-full overflow-hidden mt-1 border border-slate-700">
+                  <div
+                    className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                </div>
               </div>
-              <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
-                12 Grupos • Mata-Mata • Painel Pro
-              </span>
+
+              {/* Data & Backup Button */}
+              <button
+                onClick={() => setShowToolsModal(true)}
+                className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 text-xs font-semibold shrink-0"
+                title="Gerenciar Dados e Ferramentas"
+              >
+                <Database className="w-4 h-4 text-emerald-400" />
+                <span className="hidden sm:inline">Dados</span>
+              </button>
+
+              {/* User Account / Login Button */}
+              {user ? (
+                <button
+                  onClick={() => setShowAuthModal(true)}
+                  className="flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium transition-all group shrink-0"
+                  title={`Conectado como: ${user.displayName}`}
+                >
+                  <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center justify-center font-bold text-[11px] overflow-hidden">
+                    {user.avatarUrl ? (
+                      <img src={user.avatarUrl} alt={user.displayName} className="w-full h-full object-cover" />
+                    ) : (
+                      user.displayName.charAt(0).toUpperCase()
+                    )}
+                  </div>
+                  <div className="hidden sm:flex flex-col items-start leading-tight">
+                    <span className="text-white font-bold text-xs truncate max-w-[110px]">
+                      {user.displayName}
+                    </span>
+                    <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                      {syncStatus === 'syncing' ? (
+                        <>
+                          <RotateCw className="w-2.5 h-2.5 animate-spin text-amber-400" />
+                          <span className="text-amber-400">Salvando...</span>
+                        </>
+                      ) : syncStatus === 'synced' ? (
+                        <>
+                          <Cloud className="w-2.5 h-2.5" />
+                          <span>Nuvem Ativa</span>
+                        </>
+                      ) : (
+                        <>
+                          <CloudOff className="w-2.5 h-2.5 text-slate-400" />
+                          <span className="text-slate-400">Local</span>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowAuthModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs shadow-md shadow-emerald-500/20 transition-all shrink-0"
+                >
+                  <UserIcon className="w-4 h-4" />
+                  <span>Entrar</span>
+                </button>
+              )}
             </div>
           </div>
+        </div>
 
-          {/* Desktop Navigation Tabs */}
-          <nav className="hidden md:flex items-center gap-1 bg-slate-900/90 p-1.5 rounded-xl border border-slate-800">
+        {/* Mobile Bottom Bar */}
+        <div className="md:hidden border-t border-slate-800/90 bg-[#090d16]/95 backdrop-blur px-2 py-1.5">
+          <div className="grid grid-cols-5 gap-1">
             {navItems.map(item => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -111,145 +235,157 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
-                    isActive
-                      ? 'bg-emerald-500 text-black shadow-md shadow-emerald-500/20 scale-[1.02]'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
+                  className={`flex flex-col items-center py-1.5 px-1 rounded-lg transition-colors ${
+                    isActive ? 'bg-emerald-500/15 text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-black' : 'text-slate-400'}`} />
-                  {item.label}
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
+                  <span className="text-[10px] mt-0.5 tracking-tight truncate">{item.label}</span>
                 </button>
               );
             })}
-          </nav>
-
-          {/* Quick Tools & Progress */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className="hidden lg:flex flex-col items-end mr-1">
-              <div className="flex items-center gap-1.5 text-xs text-slate-300 font-medium">
-                <span className="text-emerald-400 font-mono font-bold">{totalMatchesPlayed}</span>
-                <span className="text-slate-500">/</span>
-                <span className="font-mono">103 Jogos</span>
-              </div>
-              <div className="w-24 bg-slate-800 h-1.5 rounded-full overflow-hidden mt-1 border border-slate-700">
-                <div
-                  className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-                  style={{ width: `${progressPercent}%` }}
-                />
-              </div>
-            </div>
-
-            <button
-              onClick={() => setShowToolsModal(true)}
-              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 text-xs font-semibold"
-              title="Gerenciar Dados e Ferramentas"
-            >
-              <Database className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">Dados</span>
-            </button>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* Mobile Bottom Bar */}
-      <div className="md:hidden border-t border-slate-800/90 bg-[#090d16]/95 backdrop-blur px-2 py-1.5">
-        <div className="grid grid-cols-5 gap-1">
-          {navItems.map(item => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`flex flex-col items-center py-1.5 px-1 rounded-lg transition-colors ${
-                  isActive ? 'bg-emerald-500/15 text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
-                <span className="text-[10px] mt-0.5 tracking-tight truncate">{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Data & Tools Management Modal */}
+      {/* Redesigned Data & Backup Modal - Fully Viewport Centered with Visible Close Button */}
       {showToolsModal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md overflow-y-auto"
           onClick={e => {
             if (e.target === e.currentTarget) setShowToolsModal(false);
           }}
         >
-          <div className="relative w-full max-w-md bg-[#0f172a] border border-slate-700 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Database className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-base font-bold text-white">Gerenciar Torneio & Backup</h3>
+          <div className="relative w-full max-w-lg my-auto bg-[#0d1424] border border-slate-700/90 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 bg-gradient-to-b from-[#141f36] to-[#0d1424] border-b border-slate-800 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white leading-tight">
+                    Gerenciar Torneio & Backup
+                  </h3>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400">
+                    <span>Conta: </span>
+                    <strong className="text-emerald-400 font-semibold">
+                      {user ? user.displayName : 'Usuário Local'}
+                    </strong>
+                    {isOnlineConfigured && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                        Supabase Online
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
+
               <button
                 onClick={() => setShowToolsModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg"
+                className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 transition-colors"
+                title="Fechar"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {importStatus && (
-              <div className="p-3 bg-slate-800 rounded-lg text-xs font-semibold text-center border border-slate-700">
-                {importStatus}
+            {/* Modal Scrollable Body */}
+            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto">
+              {importStatus && (
+                <div className="p-3 bg-slate-800/90 rounded-xl text-xs font-semibold text-center border border-slate-700 text-emerald-300">
+                  {importStatus}
+                </div>
+              )}
+
+              {/* Status Info Card */}
+              <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-start gap-3">
+                <Shield className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="text-xs text-slate-300 leading-relaxed">
+                  {user ? (
+                    <>
+                      Todos os resultados estão vinculados à conta de{' '}
+                      <strong className="text-white">{user.displayName}</strong>. Você pode fazer alterações no
+                      celular ou computador e elas serão mantidas nesta conta.
+                    </>
+                  ) : (
+                    <>
+                      Você está usando o modo local. Faça login para sincronizar seus campeonatos
+                      automaticamente entre celular e computador.
+                    </>
+                  )}
+                  {lastSyncedAt && (
+                    <div className="text-[11px] text-slate-500 mt-1">
+                      Última sincronização com a nuvem: {lastSyncedAt}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
 
-            <div className="space-y-3">
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Todos os dados são salvos localmente e persistem automaticamente no navegador ao recarregar a página.
-              </p>
-
-              {/* Export JSON */}
-              <button
-                onClick={handleExport}
-                className="w-full flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-left transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/20">
-                    <Download className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-white">Exportar Backup (JSON)</div>
-                    <div className="text-[11px] text-slate-400">Baixar arquivo com todos os resultados</div>
-                  </div>
+              {/* Section 1: Backup Operations (Prominent & Easy to Click) */}
+              <div className="space-y-2.5">
+                <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  Backup de Dados
                 </div>
-              </button>
 
-              {/* Import JSON */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-left transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center border border-blue-500/20">
-                    <Upload className="w-4 h-4" />
+                {/* Export JSON Button */}
+                <button
+                  onClick={handleExport}
+                  className="w-full flex items-center justify-between p-3.5 rounded-xl bg-slate-900 hover:bg-slate-800/90 border border-slate-700/80 text-left transition-all hover:border-emerald-500/40 group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/20 group-hover:scale-105 transition-transform">
+                      <Download className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white group-hover:text-emerald-300 transition-colors">
+                        Exportar Backup (JSON)
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Baixar arquivo com todos os jogos, gols e classificações
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-xs font-bold text-white">Importar Backup (JSON)</div>
-                    <div className="text-[11px] text-slate-400">Restaurar torneio a partir de arquivo</div>
-                  </div>
-                </div>
-              </button>
+                  <span className="text-[11px] text-emerald-400 font-bold px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20">
+                    Download
+                  </span>
+                </button>
 
-              {/* Demo Simulation Button */}
-              <div className="pt-2 border-t border-slate-800/80">
+                {/* Import JSON Button */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full flex items-center justify-between p-3.5 rounded-xl bg-slate-900 hover:bg-slate-800/90 border border-slate-700/80 text-left transition-all hover:border-blue-500/40 group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center border border-blue-500/20 group-hover:scale-105 transition-transform">
+                      <Upload className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white group-hover:text-blue-300 transition-colors">
+                        Importar Backup (JSON)
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Restaurar campeonato a partir de um arquivo salvo
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-[11px] text-blue-400 font-bold px-2 py-1 rounded bg-blue-500/10 border border-blue-500/20">
+                    Carregar
+                  </span>
+                </button>
+              </div>
+
+              {/* Section 2: Quick Simulations */}
+              <div className="pt-2 border-t border-slate-800">
                 <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-                  Ferramentas Rápidas
+                  Simulação & Testes Rápidos
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button
@@ -259,10 +395,10 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                         setShowToolsModal(false);
                       }
                     }}
-                    className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-emerald-300 border border-emerald-500/30 flex items-center justify-center gap-1.5 transition-colors"
+                    className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-emerald-300 border border-emerald-500/30 flex items-center justify-center gap-2 transition-colors"
                   >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    Simular R1 (24j)
+                    <Sparkles className="w-4 h-4 text-emerald-400" />
+                    <span>Simular R1 (24j)</span>
                   </button>
 
                   <button
@@ -272,26 +408,26 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                         setShowToolsModal(false);
                       }
                     }}
-                    className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-cyan-300 border border-cyan-500/30 flex items-center justify-center gap-1.5 transition-colors"
+                    className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-cyan-300 border border-cyan-500/30 flex items-center justify-center gap-2 transition-colors"
                   >
-                    <Trophy className="w-3.5 h-3.5" />
-                    Simular Grupos (72j)
+                    <Trophy className="w-4 h-4 text-cyan-400" />
+                    <span>Simular Grupos (72j)</span>
                   </button>
                 </div>
               </div>
 
-              {/* Reset Tournament */}
-              <div className="pt-2 border-t border-slate-800/80">
+              {/* Section 3: Reset Tournament */}
+              <div className="pt-2 border-t border-slate-800">
                 <button
                   onClick={() => {
-                    if (confirm('⚠️ TEM CERTEZA? Isso apagará todos os resultados e estatísticas do campeonato, reiniciando do zero.')) {
+                    if (confirm('⚠️ TEM CERTEZA? Isso apagará todos os resultados e estatísticas do campeonato da conta atual, reiniciando do zero.')) {
                       resetTournament();
                       setShowToolsModal(false);
                     }
                   }}
-                  className="w-full p-2.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                  className="w-full p-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-2 transition-colors"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
+                  <RefreshCw className="w-4 h-4" />
                   Reiniciar Campeonato do Zero
                 </button>
               </div>
@@ -299,6 +435,9 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
           </div>
         </div>
       )}
-    </header>
+
+      {/* Authentication & User Profile Modal */}
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+    </>
   );
 };

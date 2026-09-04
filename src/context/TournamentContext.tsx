@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { INITIAL_GROUP_MATCHES } from '../data/initialData';
 import {
   DecisionType,
@@ -19,6 +19,10 @@ import {
   getTeamProfile as calcTeamProfile,
   resolveKnockoutMatches,
 } from '../utils/calculator';
+import { useAuth } from './AuthContext';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
+
+export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'error';
 
 interface TournamentContextType {
   matches: Match[];
@@ -60,47 +64,249 @@ interface TournamentContextType {
   exportData: () => string;
   importData: (jsonStr: string) => boolean;
   seedDemoData: (numMatches?: number) => void;
+  // User synchronization & cloud status
+  syncStatus: SyncStatus;
+  lastSyncedAt: string | null;
+  refreshFromCloud: () => Promise<void>;
+  isLoadingTournament: boolean;
 }
-
-const STORAGE_KEY = 'fifa_tournament_48_data_v2';
 
 const TournamentContext = createContext<TournamentContextType | null>(null);
 
+function getStorageKey(userId: string | undefined): string {
+  return `fifa_tournament_user_${userId || 'guest'}_v2`;
+}
+
 export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Store raw matches data (group results + saved knockout results)
-  const [groupMatchesState, setGroupMatchesState] = useState<Match[]>(() => {
+  const { user } = useAuth();
+  const activeUserId = user?.id || 'guest';
+  const currentUserIdRef = useRef(activeUserId);
+  currentUserIdRef.current = activeUserId;
+
+  const [isLoadingTournament, setIsLoadingTournament] = useState<boolean>(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(isSupabaseConfigured ? 'synced' : 'offline');
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+
+  // Helper to load initial data for a given user from local cache
+  const loadLocalUserData = useCallback((userId: string) => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const key = getStorageKey(userId);
+      const saved = localStorage.getItem(key);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.groupMatches && Array.isArray(parsed.groupMatches)) {
-          // Merge with initial definitions to ensure no data loss
-          return INITIAL_GROUP_MATCHES.map(initM => {
+          const merged = INITIAL_GROUP_MATCHES.map(initM => {
             const found = parsed.groupMatches.find((m: Match) => m.id === initM.id);
             return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
           });
+          return {
+            groupMatches: merged,
+            knockoutData: parsed.knockoutData || {},
+          };
         }
       }
     } catch (e) {
-      console.error('Error loading tournament data:', e);
+      console.error('Error loading local user tournament:', e);
     }
-    return INITIAL_GROUP_MATCHES;
+    return {
+      groupMatches: INITIAL_GROUP_MATCHES,
+      knockoutData: {},
+    };
+  }, []);
+
+  // Matches states
+  const [groupMatchesState, setGroupMatchesState] = useState<Match[]>(() => {
+    return loadLocalUserData(activeUserId).groupMatches;
   });
 
   const [savedKnockoutData, setSavedKnockoutData] = useState<Record<number, Partial<Match>>>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.knockoutData && typeof parsed.knockoutData === 'object') {
-          return parsed.knockoutData;
-        }
-      }
-    } catch (e) {
-      console.error('Error loading knockout data:', e);
-    }
-    return {};
+    return loadLocalUserData(activeUserId).knockoutData;
   });
+
+  // Track if we just loaded user data to avoid immediately re-saving stale states
+  const isInitialUserLoadRef = useRef(true);
+
+  // Sync to Supabase helper
+  const syncToSupabase = useCallback(
+    async (
+      uid: string,
+      groups: Match[],
+      knockout: Record<number, Partial<Match>>
+    ) => {
+      if (!isSupabaseConfigured || !supabase || uid === 'guest') {
+        setSyncStatus('offline');
+        return;
+      }
+
+      try {
+        setSyncStatus('syncing');
+        const payload = {
+          id: `tournament_${uid}`,
+          user_id: uid,
+          name: 'FIFA Champions 48',
+          version: 2,
+          group_matches: groups,
+          knockout_data: knockout,
+          updated_at: new Date().toISOString(),
+        };
+
+        const { error } = await supabase.from('tournaments').upsert(payload, {
+          onConflict: 'id',
+        });
+
+        if (error) {
+          console.warn('Supabase sync error:', error.message);
+          setSyncStatus('error');
+        } else {
+          setSyncStatus('synced');
+          setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+        }
+      } catch (err) {
+        console.warn('Sync failed:', err);
+        setSyncStatus('error');
+      }
+    },
+    []
+  );
+
+  // Load user data when activeUserId changes (e.g. Account switch, login, logout)
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadUserData() {
+      setIsLoadingTournament(true);
+      isInitialUserLoadRef.current = true;
+
+      // 1. Instant load from local storage
+      const local = loadLocalUserData(activeUserId);
+      setGroupMatchesState(local.groupMatches);
+      setSavedKnockoutData(local.knockoutData);
+
+      // 2. If Supabase is connected and we have a valid logged in user, fetch from cloud
+      if (isSupabaseConfigured && supabase && user?.id) {
+        setSyncStatus('syncing');
+        try {
+          const { data, error } = await supabase
+            .from('tournaments')
+            .select('*')
+            .eq('user_id', user.id)
+            .maybeSingle();
+
+          if (!isCancelled) {
+            if (data && data.group_matches && Array.isArray(data.group_matches)) {
+              const merged = INITIAL_GROUP_MATCHES.map(initM => {
+                const found = data.group_matches.find((m: Match) => m.id === initM.id);
+                return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+              });
+
+              setGroupMatchesState(merged);
+              setSavedKnockoutData(data.knockout_data || {});
+
+              // Update local cache
+              const key = getStorageKey(user.id);
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  groupMatches: merged,
+                  knockoutData: data.knockout_data || {},
+                  updatedAt: data.updated_at || new Date().toISOString(),
+                })
+              );
+
+              setSyncStatus('synced');
+              setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+            } else if (!error && !data) {
+              // No tournament in cloud yet, initialize with current local data
+              await syncToSupabase(user.id, local.groupMatches, local.knockoutData);
+            }
+          }
+        } catch (e) {
+          console.warn('Error fetching user tournament from Supabase:', e);
+          if (!isCancelled) setSyncStatus('offline');
+        }
+      } else {
+        setSyncStatus('offline');
+      }
+
+      if (!isCancelled) {
+        setIsLoadingTournament(false);
+        setTimeout(() => {
+          isInitialUserLoadRef.current = false;
+        }, 150);
+      }
+    }
+
+    loadUserData();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeUserId, user?.id, loadLocalUserData, syncToSupabase]);
+
+  // Debounce saving whenever groupMatchesState or savedKnockoutData updates
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (isInitialUserLoadRef.current) return;
+
+    // 1. Immediately save to local storage for current user
+    const key = getStorageKey(activeUserId);
+    try {
+      const payload = {
+        groupMatches: groupMatchesState,
+        knockoutData: savedKnockoutData,
+        updatedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(key, JSON.stringify(payload));
+    } catch (e) {
+      console.error('Error saving local tournament cache:', e);
+    }
+
+    // 2. Debounce cloud sync to Supabase
+    if (isSupabaseConfigured && supabase && user?.id) {
+      setSyncStatus('syncing');
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+      saveTimeoutRef.current = setTimeout(() => {
+        syncToSupabase(user.id, groupMatchesState, savedKnockoutData);
+      }, 700);
+    }
+
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [groupMatchesState, savedKnockoutData, activeUserId, user?.id, syncToSupabase]);
+
+  // Force refresh from cloud
+  const refreshFromCloud = async () => {
+    if (!isSupabaseConfigured || !supabase || !user?.id) return;
+    setIsLoadingTournament(true);
+    setSyncStatus('syncing');
+
+    try {
+      const { data } = await supabase
+        .from('tournaments')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (data && data.group_matches && Array.isArray(data.group_matches)) {
+        const merged = INITIAL_GROUP_MATCHES.map(initM => {
+          const found = data.group_matches.find((m: Match) => m.id === initM.id);
+          return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+        });
+
+        setGroupMatchesState(merged);
+        setSavedKnockoutData(data.knockout_data || {});
+        setSyncStatus('synced');
+        setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      }
+    } catch (err) {
+      console.warn('Refresh error:', err);
+    } finally {
+      setIsLoadingTournament(false);
+    }
+  };
 
   // 1. Group Standings
   const groupStandings = useMemo(() => {
@@ -152,7 +358,6 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return (
       matches.find(m => {
         if (m.isFinished) return false;
-        // User controls a specific resolved team (not just placeholder unless that's all there is)
         return Boolean(m.userControls && m.userControls.trim());
       }) || null
     );
@@ -185,20 +390,6 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return acc;
     }, 0);
   }, [matches]);
-
-  // Persistent Save
-  useEffect(() => {
-    try {
-      const payload = {
-        groupMatches: groupMatchesState,
-        knockoutData: savedKnockoutData,
-        updatedAt: new Date().toISOString(),
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch (e) {
-      console.error('Error saving tournament data:', e);
-    }
-  }, [groupMatchesState, savedKnockoutData]);
 
   // Action: Save Match Result
   const saveMatch = (
@@ -288,40 +479,65 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
-  // Action: Reset entire tournament
+  // Action: Reset entire tournament for current user
   const resetTournament = () => {
     setGroupMatchesState(INITIAL_GROUP_MATCHES);
     setSavedKnockoutData({});
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      const key = getStorageKey(activeUserId);
+      localStorage.removeItem(key);
     } catch (e) {
       console.error(e);
     }
+    if (isSupabaseConfigured && supabase && user?.id) {
+      syncToSupabase(user.id, INITIAL_GROUP_MATCHES, {});
+    }
   };
 
-  // Export JSON
+  // Export JSON (Specific to current user's championship)
   const exportData = () => {
     const data = {
       version: 2,
       exportedAt: new Date().toISOString(),
+      user: {
+        id: activeUserId,
+        name: user?.displayName || 'Usuário',
+        email: user?.email || user?.phone,
+      },
       groupMatches: groupMatchesState,
       knockoutData: savedKnockoutData,
     };
     return JSON.stringify(data, null, 2);
   };
 
-  // Import JSON
+  // Import JSON (Restores into current user's championship)
   const importData = (jsonStr: string): boolean => {
     try {
       const parsed = JSON.parse(jsonStr);
       if (parsed.groupMatches && Array.isArray(parsed.groupMatches)) {
-        setGroupMatchesState(
-          INITIAL_GROUP_MATCHES.map(initM => {
-            const found = parsed.groupMatches.find((m: Match) => m.id === initM.id);
-            return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+        const newGroups = INITIAL_GROUP_MATCHES.map(initM => {
+          const found = parsed.groupMatches.find((m: Match) => m.id === initM.id);
+          return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+        });
+        const newKnockout = parsed.knockoutData || {};
+
+        setGroupMatchesState(newGroups);
+        setSavedKnockoutData(newKnockout);
+
+        // Update local storage and sync to cloud immediately
+        const key = getStorageKey(activeUserId);
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            groupMatches: newGroups,
+            knockoutData: newKnockout,
+            updatedAt: new Date().toISOString(),
           })
         );
-        setSavedKnockoutData(parsed.knockoutData || {});
+
+        if (isSupabaseConfigured && supabase && user?.id) {
+          syncToSupabase(user.id, newGroups, newKnockout);
+        }
         return true;
       }
     } catch (e) {
@@ -465,6 +681,10 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         exportData,
         importData,
         seedDemoData,
+        syncStatus,
+        lastSyncedAt,
+        refreshFromCloud,
+        isLoadingTournament,
       }}
     >
       {children}
