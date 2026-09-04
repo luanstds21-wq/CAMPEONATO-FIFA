@@ -2,11 +2,13 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { INITIAL_GROUP_MATCHES } from './src/data/initialData';
 
 const PORT = 3000;
 const DATA_DIR = path.join(process.cwd(), 'data');
-const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
-const TOURNAMENTS_FILE = path.join(DATA_DIR, 'tournaments.json');
+const GLOBAL_TOURNAMENT_FILE = path.join(DATA_DIR, 'global_tournament.json');
+const LEGACY_TOURNAMENTS_FILE = path.join(DATA_DIR, 'tournaments.json');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -17,310 +19,288 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
-interface ServerAccount {
-  id: string;
-  identifier: string; // raw or normalized
-  type: 'email' | 'phone';
-  passwordHash: string;
-  displayName: string;
-  avatarUrl?: string;
-  provider: 'email' | 'phone';
-  createdAt: string;
-  normalizedPhoneDigits?: string;
-}
+// Optional Supabase integration for cloud replication
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
 
-function readAccounts(): ServerAccount[] {
+let supabaseServer: SupabaseClient | null = null;
+if (supabaseUrl && supabaseKey && supabaseUrl.startsWith('https://')) {
   try {
-    if (fs.existsSync(ACCOUNTS_FILE)) {
-      const data = fs.readFileSync(ACCOUNTS_FILE, 'utf-8');
-      return JSON.parse(data) || [];
-    }
+    supabaseServer = createClient(supabaseUrl, supabaseKey);
+    console.log('Supabase client initialized for global tournament replication');
   } catch (err) {
-    console.error('Error reading accounts file:', err);
+    console.warn('Supabase client failed to initialize:', err);
   }
-  return [];
 }
 
-function writeAccounts(accounts: ServerAccount[]): void {
+export interface GlobalTournamentData {
+  version: number;
+  groupMatches: any[];
+  knockoutData: Record<string, any>;
+  updatedAt: string;
+}
+
+let currentTournament: GlobalTournamentData = {
+  version: 1,
+  groupMatches: [],
+  knockoutData: {},
+  updatedAt: new Date().toISOString(),
+};
+
+// Initialize or load tournament from disk or Supabase
+async function loadInitialTournament(): Promise<void> {
   try {
-    fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing accounts file:', err);
-  }
-}
-
-function readTournaments(): Record<string, unknown> {
-  try {
-    if (fs.existsSync(TOURNAMENTS_FILE)) {
-      const data = fs.readFileSync(TOURNAMENTS_FILE, 'utf-8');
-      return JSON.parse(data) || {};
-    }
-  } catch (err) {
-    console.error('Error reading tournaments file:', err);
-  }
-  return {};
-}
-
-function writeTournaments(tournaments: Record<string, unknown>): void {
-  try {
-    fs.writeFileSync(TOURNAMENTS_FILE, JSON.stringify(tournaments, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing tournaments file:', err);
-  }
-}
-
-// Phone normalization helper
-function extractDigits(raw: string): string {
-  let digits = raw.replace(/\D/g, '');
-  while (digits.startsWith('0')) {
-    digits = digits.slice(1);
-  }
-  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) {
-    digits = digits.slice(2);
-  }
-  return digits;
-}
-
-function matchIdentifier(acc: ServerAccount, rawInput: string): boolean {
-  const trimmed = rawInput.trim();
-  if (trimmed.includes('@')) {
-    return acc.type === 'email' && acc.identifier.toLowerCase() === trimmed.toLowerCase();
-  }
-
-  // Compare phone numbers
-  const inputDigits = extractDigits(trimmed);
-  const accDigits = acc.normalizedPhoneDigits || extractDigits(acc.identifier);
-
-  if (inputDigits === accDigits) return true;
-  if (inputDigits.length >= 8 && accDigits.length >= 8) {
-    const inputLast8 = inputDigits.slice(-8);
-    const accLast8 = accDigits.slice(-8);
-    if (inputLast8 === accLast8) {
-      if (inputDigits.length >= 10 && accDigits.length >= 10) {
-        return inputDigits.slice(0, 2) === accDigits.slice(0, 2);
+    // 1. If global_tournament.json exists on disk, load it
+    if (fs.existsSync(GLOBAL_TOURNAMENT_FILE)) {
+      const raw = fs.readFileSync(GLOBAL_TOURNAMENT_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.groupMatches)) {
+        currentTournament = {
+          version: typeof parsed.version === 'number' ? parsed.version : 1,
+          groupMatches: parsed.groupMatches,
+          knockoutData: parsed.knockoutData || {},
+          updatedAt: parsed.updatedAt || new Date().toISOString(),
+        };
+        console.log('Loaded shared tournament from disk with', currentTournament.groupMatches.length, 'matches');
       }
-      return true;
     }
+
+    // 2. Migration: If legacy tournaments.json exists, migrate the newest tournament
+    if ((!currentTournament.groupMatches || currentTournament.groupMatches.length === 0) && fs.existsSync(LEGACY_TOURNAMENTS_FILE)) {
+      const rawLegacy = fs.readFileSync(LEGACY_TOURNAMENTS_FILE, 'utf-8');
+      const legacyData = JSON.parse(rawLegacy);
+      const userKeys = Object.keys(legacyData || {});
+      if (userKeys.length > 0) {
+        let bestTournament: any = null;
+        for (const k of userKeys) {
+          const t = legacyData[k];
+          if (t && Array.isArray(t.groupMatches)) {
+            if (!bestTournament || (t.groupMatches.filter((m: any) => m.played).length > bestTournament.groupMatches.filter((m: any) => m.played).length)) {
+              bestTournament = t;
+            }
+          }
+        }
+
+        if (bestTournament && Array.isArray(bestTournament.groupMatches)) {
+          currentTournament = {
+            version: 1,
+            groupMatches: bestTournament.groupMatches,
+            knockoutData: bestTournament.knockoutData || {},
+            updatedAt: bestTournament.updatedAt || new Date().toISOString(),
+          };
+          saveTournamentToDisk(currentTournament);
+          console.log('Migrated legacy tournament to global shared tournament');
+        }
+      }
+    }
+
+    // 3. If Supabase is connected, check if cloud has newer or populated tournament
+    if (supabaseServer) {
+      try {
+        const { data } = await supabaseServer
+          .from('global_tournament')
+          .select('*')
+          .eq('id', 1)
+          .maybeSingle();
+
+        if (data && Array.isArray(data.group_matches) && data.group_matches.length > 0) {
+          currentTournament = {
+            version: data.version || currentTournament.version || 1,
+            groupMatches: data.group_matches,
+            knockoutData: data.knockout_data || {},
+            updatedAt: data.updated_at || new Date().toISOString(),
+          };
+          saveTournamentToDisk(currentTournament);
+          console.log('Synchronized tournament state from Supabase');
+        }
+      } catch (cloudErr) {
+        console.warn('Could not read from Supabase on start:', cloudErr);
+      }
+    }
+
+    // 4. Default to initial 72 group matches if still empty
+    if (!currentTournament.groupMatches || currentTournament.groupMatches.length === 0) {
+      currentTournament = {
+        version: 1,
+        groupMatches: INITIAL_GROUP_MATCHES,
+        knockoutData: {},
+        updatedAt: new Date().toISOString(),
+      };
+      saveTournamentToDisk(currentTournament);
+      console.log('Initialized global tournament with default 72 group matches');
+    }
+  } catch (err) {
+    console.error('Error loading global tournament:', err);
+  }
+}
+
+function saveTournamentToDisk(data: GlobalTournamentData): void {
+  try {
+    fs.writeFileSync(GLOBAL_TOURNAMENT_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving global tournament to disk:', err);
   }
 
-  return acc.identifier.toLowerCase() === trimmed.toLowerCase();
+  // Also asynchronously replicate to Supabase if configured
+  if (supabaseServer) {
+    Promise.resolve(
+      supabaseServer
+        .from('global_tournament')
+        .upsert({
+          id: 1,
+          name: 'FIFA Champions 48',
+          version: data.version,
+          group_matches: data.groupMatches,
+          knockout_data: data.knockoutData,
+          updated_at: data.updatedAt,
+        })
+    )
+      .then((res: any) => {
+        if (res && res.error) console.warn('Supabase upsert warning:', res.error.message);
+      })
+      .catch(err => {
+        console.warn('Supabase replicate error:', err);
+      });
+  }
+}
+
+// Server-Sent Events (SSE) subscribers for instant real-time sync across all devices
+interface SSEClient {
+  id: string;
+  res: express.Response;
+}
+const sseClients = new Set<SSEClient>();
+
+function broadcastTournamentUpdate(senderId?: string): void {
+  const message = JSON.stringify({
+    type: 'tournament_update',
+    senderId: senderId || null,
+    data: currentTournament,
+  });
+
+  for (const client of Array.from(sseClients)) {
+    try {
+      client.res.write(`data: ${message}\n\n`);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
 }
 
 async function startServer() {
+  await loadInitialTournament();
+
   const app = express();
-  app.use(express.json({ limit: '15mb' }));
+  app.use(express.json({ limit: '25mb' }));
 
   // Health check
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', serverTime: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      version: currentTournament.version,
+      connectedClients: sseClients.size,
+      updatedAt: currentTournament.updatedAt,
+      supabaseConfigured: Boolean(supabaseServer),
+    });
   });
 
-  // Auth: Register
-  app.post('/api/auth/register', (req, res) => {
-    try {
-      const { identifier, password, displayName } = req.body;
-      if (!identifier || !password) {
-        return res.status(400).json({ success: false, error: 'Identificador e senha são obrigatórios.' });
+  // Real-time SSE stream for all devices
+  app.get('/api/tournament/stream', (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const clientId = `client_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const client: SSEClient = { id: clientId, res };
+    sseClients.add(client);
+
+    // Initial greeting with current state
+    res.write(
+      `data: ${JSON.stringify({
+        type: 'initial',
+        data: currentTournament,
+      })}\n\n`
+    );
+
+    // Keep connection alive with periodic heartbeat
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(': heartbeat\n\n');
+      } catch {
+        clearInterval(heartbeat);
+        sseClients.delete(client);
       }
+    }, 20000);
 
-      const accounts = readAccounts();
-      const existing = accounts.find(acc => matchIdentifier(acc, identifier));
-      if (existing) {
-        return res.status(400).json({
-          success: false,
-          error: 'Já existe uma conta com este e-mail ou telefone. Faça login.',
-        });
-      }
-
-      const isEmail = identifier.includes('@');
-      const type: 'email' | 'phone' = isEmail ? 'email' : 'phone';
-      const cleanDigits = isEmail ? undefined : extractDigits(identifier);
-      const canonicalPhone = isEmail
-        ? undefined
-        : cleanDigits && (cleanDigits.length === 10 || cleanDigits.length === 11)
-        ? `+55${cleanDigits}`
-        : `+${cleanDigits || identifier}`;
-
-      const newId = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const newAccount: ServerAccount = {
-        id: newId,
-        identifier: isEmail ? identifier.trim().toLowerCase() : canonicalPhone || identifier.trim(),
-        type,
-        passwordHash: password,
-        displayName: displayName?.trim() || (isEmail ? identifier.split('@')[0] : 'Treinador'),
-        provider: type,
-        createdAt: new Date().toISOString(),
-        normalizedPhoneDigits: cleanDigits,
-      };
-
-      accounts.push(newAccount);
-      writeAccounts(accounts);
-
-      return res.json({
-        success: true,
-        user: {
-          id: newAccount.id,
-          email: newAccount.type === 'email' ? newAccount.identifier : undefined,
-          phone: newAccount.type === 'phone' ? newAccount.identifier : undefined,
-          displayName: newAccount.displayName,
-          provider: newAccount.provider,
-          createdAt: newAccount.createdAt,
-        },
-      });
-    } catch (err) {
-      console.error('Register error:', err);
-      return res.status(500).json({ success: false, error: 'Erro interno ao criar conta.' });
-    }
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      sseClients.delete(client);
+    });
   });
 
-  // Auth: Login
-  app.post('/api/auth/login', (req, res) => {
-    try {
-      const { identifier, password } = req.body;
-      if (!identifier || !password) {
-        return res.status(400).json({ success: false, error: 'Identificador e senha são obrigatórios.' });
-      }
-
-      const accounts = readAccounts();
-      const found = accounts.find(acc => matchIdentifier(acc, identifier));
-
-      if (!found) {
-        return res.status(404).json({
-          success: false,
-          error: 'Nenhuma conta encontrada com este e-mail ou telefone. Crie sua conta primeiro.',
-        });
-      }
-
-      if (found.passwordHash !== password) {
-        return res.status(401).json({
-          success: false,
-          error: 'Senha incorreta. Verifique e tente novamente.',
-        });
-      }
-
-      return res.json({
-        success: true,
-        user: {
-          id: found.id,
-          email: found.type === 'email' ? found.identifier : undefined,
-          phone: found.type === 'phone' ? found.identifier : undefined,
-          displayName: found.displayName,
-          provider: found.provider,
-          avatarUrl: found.avatarUrl,
-          createdAt: found.createdAt,
-        },
-      });
-    } catch (err) {
-      console.error('Login error:', err);
-      return res.status(500).json({ success: false, error: 'Erro interno ao realizar login.' });
-    }
+  // Get the single shared tournament
+  app.get('/api/tournament', (_req, res) => {
+    res.json({
+      success: true,
+      data: currentTournament,
+    });
   });
 
-  // Auth: Batch Sync Local Accounts (e.g. migrate accounts from mobile browser storage)
-  app.post('/api/auth/sync-local', (req, res) => {
+  // Save changes to the single shared tournament
+  app.post('/api/tournament', (req, res) => {
     try {
-      const { localAccounts } = req.body;
-      if (!Array.isArray(localAccounts)) {
-        return res.json({ success: true, count: 0 });
+      const { groupMatches, knockoutData, clientId } = req.body;
+
+      if (!groupMatches || !Array.isArray(groupMatches)) {
+        return res.status(400).json({ success: false, error: 'groupMatches deve ser uma lista válida.' });
       }
 
-      const accounts = readAccounts();
-      let added = 0;
-
-      for (const item of localAccounts) {
-        if (!item.identifier || !item.passwordHash) continue;
-        const exists = accounts.find(a => matchIdentifier(a, item.identifier));
-        if (!exists) {
-          const isEmail = item.identifier.includes('@');
-          const cleanDigits = isEmail ? undefined : extractDigits(item.identifier);
-          accounts.push({
-            id: item.id || `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            identifier: item.identifier,
-            type: item.type || (isEmail ? 'email' : 'phone'),
-            passwordHash: item.passwordHash,
-            displayName: item.displayName || 'Treinador',
-            avatarUrl: item.avatarUrl,
-            provider: item.provider || (isEmail ? 'email' : 'phone'),
-            createdAt: item.createdAt || new Date().toISOString(),
-            normalizedPhoneDigits: cleanDigits,
-          });
-          added++;
-        }
-      }
-
-      if (added > 0) {
-        writeAccounts(accounts);
-      }
-
-      return res.json({ success: true, synced: added, total: accounts.length });
-    } catch (err) {
-      console.error('Sync local error:', err);
-      return res.status(500).json({ success: false, error: 'Erro ao sincronizar contas.' });
-    }
-  });
-
-  // Auth: Reset Password
-  app.post('/api/auth/reset-password', (req, res) => {
-    try {
-      const { identifier } = req.body;
-      if (!identifier) {
-        return res.status(400).json({ success: false, error: 'Informe seu e-mail ou telefone.' });
-      }
-
-      const accounts = readAccounts();
-      const found = accounts.find(acc => matchIdentifier(acc, identifier));
-
-      if (!found) {
-        return res.status(404).json({
-          success: false,
-          error: 'Nenhuma conta localizada com este e-mail ou telefone.',
-        });
-      }
-
-      const isEmail = identifier.includes('@');
-      return res.json({
-        success: true,
-        message: isEmail
-          ? `Instruções de redefinição enviadas para ${identifier}. Verifique seu e-mail.`
-          : `Código de redefinição enviado via SMS para ${identifier}.`,
-      });
-    } catch (err) {
-      console.error('Reset password error:', err);
-      return res.status(500).json({ success: false, error: 'Erro ao processar recuperação.' });
-    }
-  });
-
-  // Tournaments: Get for User
-  app.get('/api/tournaments/:userId', (req, res) => {
-    try {
-      const { userId } = req.params;
-      const tournaments = readTournaments();
-      const data = tournaments[userId];
-      if (!data) {
-        return res.json({ success: true, data: null });
-      }
-      return res.json({ success: true, data });
-    } catch (err) {
-      console.error('Get tournament error:', err);
-      return res.status(500).json({ success: false, error: 'Erro ao buscar torneio.' });
-    }
-  });
-
-  // Tournaments: Save for User
-  app.post('/api/tournaments/:userId', (req, res) => {
-    try {
-      const { userId } = req.params;
-      const payload = req.body;
-      const tournaments = readTournaments();
-      tournaments[userId] = {
-        ...payload,
+      currentTournament = {
+        version: (currentTournament.version || 0) + 1,
+        groupMatches,
+        knockoutData: knockoutData || {},
         updatedAt: new Date().toISOString(),
       };
-      writeTournaments(tournaments);
-      return res.json({ success: true, updatedAt: tournaments[userId].updatedAt });
+
+      saveTournamentToDisk(currentTournament);
+      broadcastTournamentUpdate(clientId);
+
+      return res.json({
+        success: true,
+        version: currentTournament.version,
+        updatedAt: currentTournament.updatedAt,
+      });
     } catch (err) {
       console.error('Save tournament error:', err);
-      return res.status(500).json({ success: false, error: 'Erro ao salvar torneio.' });
+      return res.status(500).json({ success: false, error: 'Erro ao salvar o campeonato.' });
+    }
+  });
+
+  // Reset the shared tournament
+  app.post('/api/tournament/reset', (req, res) => {
+    try {
+      const { clientId } = req.body;
+      currentTournament = {
+        version: (currentTournament.version || 0) + 1,
+        groupMatches: INITIAL_GROUP_MATCHES,
+        knockoutData: {},
+        updatedAt: new Date().toISOString(),
+      };
+
+      saveTournamentToDisk(currentTournament);
+      broadcastTournamentUpdate(clientId);
+
+      return res.json({
+        success: true,
+        version: currentTournament.version,
+        updatedAt: currentTournament.updatedAt,
+      });
+    } catch (err) {
+      console.error('Reset tournament error:', err);
+      return res.status(500).json({ success: false, error: 'Erro ao reiniciar o campeonato.' });
     }
   });
 
@@ -340,7 +320,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log(`Shared Tournament Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

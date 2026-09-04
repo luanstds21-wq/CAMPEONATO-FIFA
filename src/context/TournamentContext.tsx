@@ -19,8 +19,6 @@ import {
   getTeamProfile as calcTeamProfile,
   resolveKnockoutMatches,
 } from '../utils/calculator';
-import { useAuth } from './AuthContext';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
 
 export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'error';
 
@@ -64,7 +62,7 @@ interface TournamentContextType {
   exportData: () => string;
   importData: (jsonStr: string) => boolean;
   seedDemoData: (numMatches?: number) => void;
-  // User synchronization & cloud status
+  // Shared global synchronization status
   syncStatus: SyncStatus;
   lastSyncedAt: string | null;
   refreshFromCloud: () => Promise<void>;
@@ -73,109 +71,71 @@ interface TournamentContextType {
 
 const TournamentContext = createContext<TournamentContextType | null>(null);
 
-function getStorageKey(userId: string | undefined): string {
-  return `fifa_tournament_user_${userId || 'guest'}_v2`;
+const SHARED_CACHE_KEY = 'fifa_champions_48_shared_cache';
+
+function loadCachedTournament(): {
+  groupMatches: Match[];
+  knockoutData: Record<number, Partial<Match>>;
+} {
+  try {
+    const raw = localStorage.getItem(SHARED_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.groupMatches && Array.isArray(parsed.groupMatches)) {
+        const merged = INITIAL_GROUP_MATCHES.map(initM => {
+          const found = parsed.groupMatches.find((m: Match) => m.id === initM.id);
+          return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+        });
+        return {
+          groupMatches: merged,
+          knockoutData: parsed.knockoutData || {},
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('Cache load error:', e);
+  }
+  return {
+    groupMatches: INITIAL_GROUP_MATCHES,
+    knockoutData: {},
+  };
 }
 
 export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user } = useAuth();
-  const activeUserId = user?.id || 'guest';
-  const currentUserIdRef = useRef(activeUserId);
-  currentUserIdRef.current = activeUserId;
+  // Unique client ID to prevent echo processing of our own real-time SSE updates
+  const myClientIdRef = useRef<string>(`client_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
 
-  const [isLoadingTournament, setIsLoadingTournament] = useState<boolean>(false);
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>(isSupabaseConfigured ? 'synced' : 'offline');
+  const [isLoadingTournament, setIsLoadingTournament] = useState<boolean>(true);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('syncing');
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
-  // Helper to load initial data for a given user from local cache
-  const loadLocalUserData = useCallback((userId: string) => {
-    try {
-      const key = getStorageKey(userId);
-      const saved = localStorage.getItem(key);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.groupMatches && Array.isArray(parsed.groupMatches)) {
-          const merged = INITIAL_GROUP_MATCHES.map(initM => {
-            const found = parsed.groupMatches.find((m: Match) => m.id === initM.id);
-            return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
-          });
-          return {
-            groupMatches: merged,
-            knockoutData: parsed.knockoutData || {},
-          };
-        }
-      }
-    } catch (e) {
-      console.error('Error loading local user tournament:', e);
-    }
-    return {
-      groupMatches: INITIAL_GROUP_MATCHES,
-      knockoutData: {},
-    };
-  }, []);
-
-  // Matches states
+  // Initial tournament state from local cache for instant zero-flicker startup
   const [groupMatchesState, setGroupMatchesState] = useState<Match[]>(() => {
-    return loadLocalUserData(activeUserId).groupMatches;
+    return loadCachedTournament().groupMatches;
   });
 
   const [savedKnockoutData, setSavedKnockoutData] = useState<Record<number, Partial<Match>>>(() => {
-    return loadLocalUserData(activeUserId).knockoutData;
+    return loadCachedTournament().knockoutData;
   });
 
-  // Track if we just loaded user data to avoid immediately re-saving stale states
-  const isInitialUserLoadRef = useRef(true);
+  // Flag to avoid syncing on the very first mount before we fetch from server
+  const isReadyToSyncRef = useRef<boolean>(false);
 
-  // Sync to Supabase helper
-  // Sync helper: Supabase or Server API
+  // Helper to sync state to server
   const syncToServer = useCallback(
     async (
-      uid: string,
       groups: Match[],
       knockout: Record<number, Partial<Match>>
     ) => {
-      if (!uid || uid === 'guest') {
-        setSyncStatus('offline');
-        return;
-      }
-
       setSyncStatus('syncing');
-
-      // 1. If Supabase is configured
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const payload = {
-            id: `tournament_${uid}`,
-            user_id: uid,
-            name: 'FIFA Champions 48',
-            version: 2,
-            group_matches: groups,
-            knockout_data: knockout,
-            updated_at: new Date().toISOString(),
-          };
-
-          const { error } = await supabase.from('tournaments').upsert(payload, {
-            onConflict: 'id',
-          });
-
-          if (!error) {
-            setSyncStatus('synced');
-            setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-            return;
-          }
-        } catch {
-          // Fall through to server API
-        }
-      }
-
-      // 2. Primary / Built-in Server API
       try {
-        const response = await fetch(`/api/tournaments/${encodeURIComponent(uid)}`, {
+        const response = await fetch('/api/tournament', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             groupMatches: groups,
             knockoutData: knockout,
+            clientId: myClientIdRef.current,
           }),
         });
 
@@ -183,7 +143,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setSyncStatus('synced');
           setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
         } else {
-          setSyncStatus('offline');
+          setSyncStatus('error');
         }
       } catch (err) {
         console.warn('Server sync error:', err);
@@ -193,185 +153,177 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     []
   );
 
-  // Load user data when activeUserId changes (e.g. Account switch, login, logout)
+  // Apply tournament payload helper
+  const applyRemoteTournament = useCallback((data: { groupMatches: any[]; knockoutData?: Record<number, Partial<Match>> }) => {
+    if (data.groupMatches && Array.isArray(data.groupMatches) && data.groupMatches.length > 0) {
+      const merged = INITIAL_GROUP_MATCHES.map(initM => {
+        const found = data.groupMatches.find((m: any) => m.id === initM.id);
+        return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+      });
+
+      setGroupMatchesState(merged);
+      const newKnockout = data.knockoutData || {};
+      setSavedKnockoutData(newKnockout);
+
+      // Save to local cache
+      try {
+        localStorage.setItem(
+          SHARED_CACHE_KEY,
+          JSON.stringify({
+            groupMatches: merged,
+            knockoutData: newKnockout,
+            updatedAt: new Date().toISOString(),
+          })
+        );
+      } catch (e) {
+        console.warn('Cache write error:', e);
+      }
+
+      setSyncStatus('synced');
+      setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      return true;
+    }
+    return false;
+  }, []);
+
+  // Fetch current shared tournament from server
+  const fetchFromServer = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tournament');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          const hasRemoteData = applyRemoteTournament(json.data);
+          if (!hasRemoteData) {
+            // Server tournament was empty, seed with initial matches
+            const cached = loadCachedTournament();
+            if (cached.groupMatches.some(m => m.isFinished)) {
+              await syncToServer(cached.groupMatches, cached.knockoutData);
+            } else {
+              await syncToServer(INITIAL_GROUP_MATCHES, {});
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Fetch from server error:', err);
+      setSyncStatus('offline');
+    } finally {
+      setIsLoadingTournament(false);
+      isReadyToSyncRef.current = true;
+    }
+  }, [applyRemoteTournament, syncToServer]);
+
+  // Initial load + Real-time SSE listener setup
   useEffect(() => {
     let isCancelled = false;
 
-    async function loadUserData() {
-      setIsLoadingTournament(true);
-      isInitialUserLoadRef.current = true;
+    // 1. Initial fetch
+    fetchFromServer();
 
-      // 1. Instant load from local storage
-      const local = loadLocalUserData(activeUserId);
-      setGroupMatchesState(local.groupMatches);
-      setSavedKnockoutData(local.knockoutData);
+    // 2. Real-time Server-Sent Events (SSE) listener
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/tournament/stream');
 
-      // 2. If user is logged in, fetch from Server API or Supabase
-      if (user?.id) {
-        setSyncStatus('syncing');
+      eventSource.onmessage = event => {
+        if (isCancelled) return;
         try {
-          let loaded = false;
-
-          // Try Supabase if configured
-          if (isSupabaseConfigured && supabase) {
-            try {
-              const { data, error } = await supabase
-                .from('tournaments')
-                .select('*')
-                .eq('user_id', user.id)
-                .maybeSingle();
-
-              if (!error && data && data.group_matches && Array.isArray(data.group_matches)) {
-                const merged = INITIAL_GROUP_MATCHES.map(initM => {
-                  const found = data.group_matches.find((m: Match) => m.id === initM.id);
-                  return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
-                });
-
-                if (!isCancelled) {
-                  setGroupMatchesState(merged);
-                  setSavedKnockoutData(data.knockout_data || {});
-                  setSyncStatus('synced');
-                  setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-                  loaded = true;
-                }
-              }
-            } catch {
-              // Fallback to server API
+          const payload = JSON.parse(event.data);
+          // If update came from another client, apply it immediately
+          if (payload.type === 'tournament_update' && payload.data) {
+            if (payload.senderId !== myClientIdRef.current) {
+              applyRemoteTournament(payload.data);
             }
-          }
-
-          // Try Server API
-          if (!loaded) {
-            const res = await fetch(`/api/tournaments/${encodeURIComponent(user.id)}`);
-            if (res.ok) {
-              const resData = await res.json();
-              if (resData.success && resData.data && resData.data.groupMatches) {
-                const serverGroups = resData.data.groupMatches;
-                const merged = INITIAL_GROUP_MATCHES.map(initM => {
-                  const found = serverGroups.find((m: Match) => m.id === initM.id);
-                  return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
-                });
-
-                if (!isCancelled) {
-                  setGroupMatchesState(merged);
-                  setSavedKnockoutData(resData.data.knockoutData || {});
-                  setSyncStatus('synced');
-                  setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-                  loaded = true;
-                }
-              } else if (!resData.data && (local.groupMatches.some(m => m.played) || Object.keys(local.knockoutData).length > 0)) {
-                // Initialize server with existing local tournament
-                await syncToServer(user.id, local.groupMatches, local.knockoutData);
-              }
+          } else if (payload.type === 'initial' && payload.data) {
+            // Initial payload when connecting
+            if (payload.data.groupMatches && payload.data.groupMatches.length > 0) {
+              applyRemoteTournament(payload.data);
             }
           }
         } catch (e) {
-          console.warn('Error fetching user tournament from server:', e);
-          if (!isCancelled) setSyncStatus('offline');
+          console.error('Error handling SSE message:', e);
         }
-      } else {
-        setSyncStatus('offline');
-      }
+      };
 
-      if (!isCancelled) {
-        setIsLoadingTournament(false);
-        setTimeout(() => {
-          isInitialUserLoadRef.current = false;
-        }, 150);
-      }
+      eventSource.onerror = () => {
+        // Will auto-reconnect
+        if (!isCancelled) {
+          setSyncStatus('syncing');
+        }
+      };
+
+      eventSource.onopen = () => {
+        if (!isCancelled) {
+          setSyncStatus('synced');
+        }
+      };
+    } catch (err) {
+      console.warn('EventSource not supported or blocked:', err);
     }
 
-    loadUserData();
+    // 3. Auto-sync on window focus / visibility change (e.g. user unlocks phone or switches tab)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchFromServer();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+
+    // 4. Background polling fallback every 8 seconds in case SSE drops on mobile
+    const pollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchFromServer();
+      }
+    }, 8000);
 
     return () => {
       isCancelled = true;
+      if (eventSource) eventSource.close();
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+      clearInterval(pollInterval);
     };
-  }, [activeUserId, user?.id, loadLocalUserData, syncToServer]);
+  }, [fetchFromServer, applyRemoteTournament]);
 
-  // Debounce saving whenever groupMatchesState or savedKnockoutData updates
+  // Debounced auto-save whenever local state changes
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    if (isInitialUserLoadRef.current) return;
+    if (!isReadyToSyncRef.current) return;
 
-    // 1. Immediately save to local storage for current user
-    const key = getStorageKey(activeUserId);
+    // Cache locally immediately
     try {
-      const payload = {
-        groupMatches: groupMatchesState,
-        knockoutData: savedKnockoutData,
-        updatedAt: new Date().toISOString(),
-      };
-      localStorage.setItem(key, JSON.stringify(payload));
+      localStorage.setItem(
+        SHARED_CACHE_KEY,
+        JSON.stringify({
+          groupMatches: groupMatchesState,
+          knockoutData: savedKnockoutData,
+          updatedAt: new Date().toISOString(),
+        })
+      );
     } catch (e) {
       console.error('Error saving local tournament cache:', e);
     }
 
-    // 2. Debounce cloud sync to Server / Supabase
-    if (user?.id) {
-      setSyncStatus('syncing');
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    // Debounce server broadcast (500ms)
+    setSyncStatus('syncing');
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
-      saveTimeoutRef.current = setTimeout(() => {
-        syncToServer(user.id, groupMatchesState, savedKnockoutData);
-      }, 700);
-    }
+    saveTimeoutRef.current = setTimeout(() => {
+      syncToServer(groupMatchesState, savedKnockoutData);
+    }, 500);
 
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [groupMatchesState, savedKnockoutData, activeUserId, user?.id, syncToServer]);
+  }, [groupMatchesState, savedKnockoutData, syncToServer]);
 
-  // Force refresh from cloud / server
+  // Force manual refresh from server
   const refreshFromCloud = async () => {
-    if (!user?.id) return;
     setIsLoadingTournament(true);
-    setSyncStatus('syncing');
-
-    try {
-      if (isSupabaseConfigured && supabase) {
-        const { data } = await supabase
-          .from('tournaments')
-          .select('*')
-          .eq('user_id', user.id)
-          .maybeSingle();
-
-        if (data && data.group_matches && Array.isArray(data.group_matches)) {
-          const merged = INITIAL_GROUP_MATCHES.map(initM => {
-            const found = data.group_matches.find((m: Match) => m.id === initM.id);
-            return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
-          });
-
-          setGroupMatchesState(merged);
-          setSavedKnockoutData(data.knockout_data || {});
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-          return;
-        }
-      }
-
-      // Fallback or Primary: Server API
-      const res = await fetch(`/api/tournaments/${encodeURIComponent(user.id)}`);
-      if (res.ok) {
-        const resData = await res.json();
-        if (resData.success && resData.data && resData.data.groupMatches) {
-          const serverGroups = resData.data.groupMatches;
-          const merged = INITIAL_GROUP_MATCHES.map(initM => {
-            const found = serverGroups.find((m: Match) => m.id === initM.id);
-            return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
-          });
-
-          setGroupMatchesState(merged);
-          setSavedKnockoutData(resData.data.knockoutData || {});
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-        }
-      }
-    } catch (err) {
-      console.warn('Refresh error:', err);
-    } finally {
-      setIsLoadingTournament(false);
-    }
+    await fetchFromServer();
   };
 
   // 1. Group Standings
@@ -457,7 +409,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }, 0);
   }, [matches]);
 
-  // Action: Save Match Result
+  // Action: Save Match Result (optimistic + auto sync)
   const saveMatch = (
     matchId: number,
     data: {
@@ -545,38 +497,32 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
-  // Action: Reset entire tournament for current user
+  // Action: Reset entire shared tournament
   const resetTournament = () => {
     setGroupMatchesState(INITIAL_GROUP_MATCHES);
     setSavedKnockoutData({});
     try {
-      const key = getStorageKey(activeUserId);
-      localStorage.removeItem(key);
+      localStorage.removeItem(SHARED_CACHE_KEY);
     } catch (e) {
       console.error(e);
     }
-    if (isSupabaseConfigured && supabase && user?.id) {
-      syncToSupabase(user.id, INITIAL_GROUP_MATCHES, {});
-    }
+    syncToServer(INITIAL_GROUP_MATCHES, {});
   };
 
-  // Export JSON (Specific to current user's championship)
+  // Export JSON (Complete backup of shared tournament)
   const exportData = () => {
     const data = {
       version: 2,
       exportedAt: new Date().toISOString(),
-      user: {
-        id: activeUserId,
-        name: user?.displayName || 'Usuário',
-        email: user?.email || user?.phone,
-      },
+      tournamentName: 'FIFA Champions League 48',
+      type: 'shared_global_tournament',
       groupMatches: groupMatchesState,
       knockoutData: savedKnockoutData,
     };
     return JSON.stringify(data, null, 2);
   };
 
-  // Import JSON (Restores into current user's championship)
+  // Import JSON (Restores into shared tournament for everyone)
   const importData = (jsonStr: string): boolean => {
     try {
       const parsed = JSON.parse(jsonStr);
@@ -590,20 +536,21 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         setGroupMatchesState(newGroups);
         setSavedKnockoutData(newKnockout);
 
-        // Update local storage and sync to cloud immediately
-        const key = getStorageKey(activeUserId);
-        localStorage.setItem(
-          key,
-          JSON.stringify({
-            groupMatches: newGroups,
-            knockoutData: newKnockout,
-            updatedAt: new Date().toISOString(),
-          })
-        );
-
-        if (isSupabaseConfigured && supabase && user?.id) {
-          syncToSupabase(user.id, newGroups, newKnockout);
+        // Update local cache and immediately push to server
+        try {
+          localStorage.setItem(
+            SHARED_CACHE_KEY,
+            JSON.stringify({
+              groupMatches: newGroups,
+              knockoutData: newKnockout,
+              updatedAt: new Date().toISOString(),
+            })
+          );
+        } catch (e) {
+          console.warn('Cache write error:', e);
         }
+
+        syncToServer(newGroups, newKnockout);
         return true;
       }
     } catch (e) {
@@ -612,7 +559,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return false;
   };
 
-  // Demo seed (for test simulation)
+  // Demo seed (for rapid test simulation)
   const seedDemoData = (numMatches = 24) => {
     const samplePlayers: Record<string, string[]> = {
       'Porto': ['Taremi', 'Evanilson', 'Galeno', 'Pepê'],
@@ -663,8 +610,8 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       'LALIGA XI': ['Messi', 'Cristiano Ronaldo', 'Iniesta', 'Xavi'],
     };
 
-    setGroupMatchesState(prev =>
-      prev.map((m, idx) => {
+    setGroupMatchesState(prev => {
+      const updated = prev.map((m, idx) => {
         if (idx < numMatches) {
           const hScore = Math.floor(Math.random() * 4);
           const aScore = Math.floor(Math.random() * 4);
@@ -679,9 +626,9 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             const a = hasAssist ? homePool.filter(x => x !== p)[0] : undefined;
             goals.push({
               id: `demo_${m.id}_h_${i}`,
-              minute: Math.floor(Math.random() * 88) + 1,
-              player: p,
+              minute: Math.floor(Math.random() * 90) + 1,
               team: m.homeTeam,
+              player: p,
               assistPlayer: a,
             });
           }
@@ -692,14 +639,16 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             const a = hasAssist ? awayPool.filter(x => x !== p)[0] : undefined;
             goals.push({
               id: `demo_${m.id}_a_${i}`,
-              minute: Math.floor(Math.random() * 88) + 1,
-              player: p,
+              minute: Math.floor(Math.random() * 90) + 1,
               team: m.awayTeam,
+              player: p,
               assistPlayer: a,
             });
           }
 
-          goals.sort((a, b) => a.minute - b.minute);
+          let winner: string | undefined = undefined;
+          if (hScore > aScore) winner = m.homeTeam;
+          else if (aScore > hScore) winner = m.awayTeam;
 
           return {
             ...m,
@@ -707,13 +656,17 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             awayScore: aScore,
             goals,
             isFinished: true,
-            winnerTeam: hScore > aScore ? m.homeTeam : aScore > hScore ? m.awayTeam : undefined,
+            winnerTeam: winner,
+            decisionType: 'regular',
             updatedAt: new Date().toISOString(),
           };
         }
         return m;
-      })
-    );
+      });
+
+      syncToServer(updated, savedKnockoutData);
+      return updated;
+    });
   };
 
   return (

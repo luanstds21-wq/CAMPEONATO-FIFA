@@ -1,27 +1,22 @@
 import React, { useRef, useState } from 'react';
 import {
   BarChart3,
-  CheckCircle2,
   Cloud,
-  CloudOff,
   Database,
   Download,
   Flame,
   Gamepad2,
   Home,
-  LogOut,
   RefreshCw,
   RotateCw,
   Shield,
   Sparkles,
   Trophy,
   Upload,
-  User as UserIcon,
+  Users,
   X,
 } from 'lucide-react';
 import { useTournament } from '../context/TournamentContext';
-import { useAuth } from '../context/AuthContext';
-import { AuthModal } from './AuthModal';
 
 export type NavTab = 'dashboard' | 'standings' | 'matches' | 'stats' | 'bracket';
 
@@ -34,7 +29,6 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
   const {
     totalMatchesPlayed,
-    matches,
     exportData,
     importData,
     resetTournament,
@@ -45,10 +39,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
     isLoadingTournament,
   } = useTournament();
 
-  const { user, isOnlineConfigured, signOut } = useAuth();
-
   const [showToolsModal, setShowToolsModal] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -68,8 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const userSlug = user?.displayName ? user.displayName.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'campeonato';
-    a.download = `fifa_champions_48_${userSlug}_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `fifa_champions_48_campeonato_backup_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -83,14 +73,13 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
       const content = event.target?.result as string;
       const ok = importData(content);
       if (ok) {
-        setImportStatus('✅ Dados importados com sucesso!');
-        setTimeout(() => setImportStatus(null), 3000);
+        setImportStatus('✅ Dados importados com sucesso! Sincronizado com todos os dispositivos.');
+        setTimeout(() => setImportStatus(null), 3500);
       } else {
-        setImportStatus('❌ Arquivo inválido. Verifique o formato do JSON.');
+        setImportStatus('❌ Arquivo inválido. Verifique o formato do arquivo JSON.');
       }
     };
     reader.readAsText(file);
-    // Reset file input
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -120,7 +109,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                   </span>
                 </div>
                 <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
-                  12 Grupos • Mata-Mata • Painel Pro
+                  Campeonato Único • Atualização em Tempo Real
                 </span>
               </div>
             </div>
@@ -147,7 +136,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
               })}
             </nav>
 
-            {/* Quick Tools & User Profile */}
+            {/* Live Sync Status & Tools */}
             <div className="flex items-center gap-2 sm:gap-3">
               {/* Progress Tracker (Desktop) */}
               <div className="hidden lg:flex flex-col items-end mr-1">
@@ -167,60 +156,60 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
               {/* Data & Backup Button */}
               <button
                 onClick={() => setShowToolsModal(true)}
-                className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 text-xs font-semibold shrink-0"
-                title="Gerenciar Dados e Ferramentas"
+                className="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 text-xs font-semibold shrink-0"
+                title="Exportar / Importar Backup e Ferramentas"
               >
                 <Database className="w-4 h-4 text-emerald-400" />
-                <span className="hidden sm:inline">Dados</span>
+                <span className="hidden sm:inline">Backup & Dados</span>
               </button>
 
-              {/* User Account / Login Button */}
-              {user ? (
-                <button
-                  onClick={() => setShowAuthModal(true)}
-                  className="flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium transition-all group shrink-0"
-                  title={`Conectado como: ${user.displayName}`}
-                >
-                  <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center justify-center font-bold text-[11px] overflow-hidden">
-                    {user.avatarUrl ? (
-                      <img src={user.avatarUrl} alt={user.displayName} className="w-full h-full object-cover" />
+              {/* Shared Real-Time Online Status Pill */}
+              <button
+                onClick={() => refreshFromCloud()}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900/95 hover:bg-slate-800/90 border border-slate-700/90 transition-all select-none group shrink-0"
+                title="Base de Dados Única Compartilhada. Clique para atualizar."
+              >
+                <div className="relative flex h-2 w-2 shrink-0">
+                  <span
+                    className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                      syncStatus === 'syncing'
+                        ? 'bg-amber-400'
+                        : syncStatus === 'synced'
+                        ? 'bg-emerald-400'
+                        : 'bg-slate-400'
+                    }`}
+                  />
+                  <span
+                    className={`relative inline-flex rounded-full h-2 w-2 ${
+                      syncStatus === 'syncing'
+                        ? 'bg-amber-500'
+                        : syncStatus === 'synced'
+                        ? 'bg-emerald-500'
+                        : 'bg-slate-500'
+                    }`}
+                  />
+                </div>
+
+                <div className="flex flex-col items-start leading-tight">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] font-bold text-white group-hover:text-emerald-300 transition-colors">
+                      {syncStatus === 'syncing' ? 'Salvando' : 'Ao Vivo'}
+                    </span>
+                    {syncStatus === 'syncing' ? (
+                      <RotateCw className="w-2.5 h-2.5 animate-spin text-amber-400" />
                     ) : (
-                      user.displayName.charAt(0).toUpperCase()
+                      <Cloud className="w-2.5 h-2.5 text-emerald-400" />
                     )}
                   </div>
-                  <div className="hidden sm:flex flex-col items-start leading-tight">
-                    <span className="text-white font-bold text-xs truncate max-w-[110px]">
-                      {user.displayName}
-                    </span>
-                    <span className="text-[10px] text-emerald-400 flex items-center gap-1">
-                      {syncStatus === 'syncing' ? (
-                        <>
-                          <RotateCw className="w-2.5 h-2.5 animate-spin text-amber-400" />
-                          <span className="text-amber-400">Salvando...</span>
-                        </>
-                      ) : syncStatus === 'synced' ? (
-                        <>
-                          <Cloud className="w-2.5 h-2.5" />
-                          <span>Nuvem Ativa</span>
-                        </>
-                      ) : (
-                        <>
-                          <CloudOff className="w-2.5 h-2.5 text-slate-400" />
-                          <span className="text-slate-400">Local</span>
-                        </>
-                      )}
-                    </span>
-                  </div>
-                </button>
-              ) : (
-                <button
-                  onClick={() => setShowAuthModal(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs shadow-md shadow-emerald-500/20 transition-all shrink-0"
-                >
-                  <UserIcon className="w-4 h-4" />
-                  <span>Entrar</span>
-                </button>
-              )}
+                  <span className="text-[9px] text-slate-400 hidden sm:inline">
+                    {syncStatus === 'syncing'
+                      ? 'Gravando na nuvem...'
+                      : lastSyncedAt
+                      ? `Sincronizado ${lastSyncedAt}`
+                      : 'Compartilhado'}
+                  </span>
+                </div>
+              </button>
             </div>
           </div>
         </div>
@@ -248,7 +237,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
         </div>
       </header>
 
-      {/* Redesigned Data & Backup Modal - Fully Viewport Centered with Visible Close Button */}
+      {/* Data & Backup Modal */}
       {showToolsModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md overflow-y-auto"
@@ -265,18 +254,15 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white leading-tight">
-                    Gerenciar Torneio & Backup
+                    Campeonato Único & Backup
                   </h3>
                   <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400">
-                    <span>Conta: </span>
-                    <strong className="text-emerald-400 font-semibold">
-                      {user ? user.displayName : 'Usuário Local'}
-                    </strong>
-                    {isOnlineConfigured && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                        Supabase Online
-                      </span>
-                    )}
+                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
+                      <Users className="w-3.5 h-3.5" /> Base Global Compartilhada
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                      Multi-Dispositivo
+                    </span>
                   </div>
                 </div>
               </div>
@@ -293,7 +279,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
             {/* Modal Scrollable Body */}
             <div className="p-4 sm:p-6 space-y-4 overflow-y-auto">
               {importStatus && (
-                <div className="p-3 bg-slate-800/90 rounded-xl text-xs font-semibold text-center border border-slate-700 text-emerald-300">
+                <div className="p-3 bg-slate-800/90 rounded-xl text-xs font-semibold text-center border border-slate-700 text-emerald-300 animate-fadeIn">
                   {importStatus}
                 </div>
               )}
@@ -302,30 +288,22 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
               <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-start gap-3">
                 <Shield className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-xs text-slate-300 leading-relaxed">
-                  {user ? (
-                    <>
-                      Todos os resultados estão vinculados à conta de{' '}
-                      <strong className="text-white">{user.displayName}</strong>. Você pode fazer alterações no
-                      celular ou computador e elas serão mantidas nesta conta.
-                    </>
-                  ) : (
-                    <>
-                      Você está usando o modo local. Faça login para sincronizar seus campeonatos
-                      automaticamente entre celular e computador.
-                    </>
-                  )}
+                  Todos os dispositivos (celular, tablet ou computador) acessam e editam o{' '}
+                  <strong className="text-white">mesmo campeonato central</strong>. Ao cadastrar um resultado em um
+                  aparelho, todos os outros aparelhos recebem a alteração automaticamente.
                   {lastSyncedAt && (
-                    <div className="text-[11px] text-slate-500 mt-1">
-                      Última sincronização com a nuvem: {lastSyncedAt}
+                    <div className="text-[11px] text-emerald-400 font-mono mt-1.5 flex items-center gap-1.5">
+                      <Cloud className="w-3 h-3 inline" />
+                      Última atualização registrada: {lastSyncedAt}
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Section 1: Backup Operations (Prominent & Easy to Click) */}
+              {/* Section 1: Backup Operations */}
               <div className="space-y-2.5">
                 <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  Backup de Dados
+                  Backup de Segurança
                 </div>
 
                 {/* Export JSON Button */}
@@ -342,11 +320,11 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                         Exportar Backup (JSON)
                       </div>
                       <div className="text-[11px] text-slate-400">
-                        Baixar arquivo com todos os jogos, gols e classificações
+                        Baixar arquivo com todos os 103 jogos, gols, cartões e chaveamentos
                       </div>
                     </div>
                   </div>
-                  <span className="text-[11px] text-emerald-400 font-bold px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20">
+                  <span className="text-[11px] text-emerald-400 font-bold px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                     Download
                   </span>
                 </button>
@@ -369,14 +347,14 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
                     </div>
                     <div>
                       <div className="text-xs font-bold text-white group-hover:text-blue-300 transition-colors">
-                        Importar Backup (JSON)
+                        Importar / Restaurar Backup (JSON)
                       </div>
                       <div className="text-[11px] text-slate-400">
-                        Restaurar campeonato a partir de um arquivo salvo
+                        Restaurar dados e propagar para todos os dispositivos
                       </div>
                     </div>
                   </div>
-                  <span className="text-[11px] text-blue-400 font-bold px-2 py-1 rounded bg-blue-500/10 border border-blue-500/20">
+                  <span className="text-[11px] text-blue-400 font-bold px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20">
                     Carregar
                   </span>
                 </button>
@@ -420,7 +398,11 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
               <div className="pt-2 border-t border-slate-800">
                 <button
                   onClick={() => {
-                    if (confirm('⚠️ TEM CERTEZA? Isso apagará todos os resultados e estatísticas do campeonato da conta atual, reiniciando do zero.')) {
+                    if (
+                      confirm(
+                        '⚠️ TEM CERTEZA? Isso apagará todos os resultados e reiniciará o campeonato compartilhado do zero para todos os dispositivos.'
+                      )
+                    ) {
                       resetTournament();
                       setShowToolsModal(false);
                     }
@@ -435,9 +417,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => {
           </div>
         </div>
       )}
-
-      {/* Authentication & User Profile Modal */}
-      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
     </>
   );
 };
