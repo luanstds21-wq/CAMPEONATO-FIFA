@@ -19,7 +19,6 @@ interface AuthContextType {
     displayName: string,
     remember: boolean
   ) => Promise<{ success: boolean; error?: string }>;
-  signInWithGoogle: (remember: boolean) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (identifier: string) => Promise<{ success: boolean; error?: string; message?: string }>;
   signOut: () => Promise<void>;
 }
@@ -37,7 +36,7 @@ interface LocalAccount {
   passwordHash: string;
   displayName: string;
   avatarUrl?: string;
-  provider: 'email' | 'phone' | 'google';
+  provider: 'email' | 'phone';
   createdAt: string;
 }
 
@@ -363,63 +362,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  // Sign In with Google
-  const signInWithGoogle = async (remember: boolean): Promise<{ success: boolean; error?: string }> => {
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { error } = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: window.location.origin,
-            queryParams: {
-              access_type: 'offline',
-              prompt: 'consent',
-            },
-          },
-        });
-        if (error) return { success: false, error: error.message };
-        return { success: true };
-      } catch (err: unknown) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : 'Erro ao iniciar autenticação com Google.',
-        };
-      }
-    }
-
-    // Local / Preview Google Sign-in Simulation
-    // Checks if account with google email already exists to link correctly as requested
-    const accounts = getLocalAccounts();
-    const googleEmail = 'novum.agencia.design@gmail.com';
-    let existing = accounts.find(a => a.identifier.toLowerCase() === googleEmail.toLowerCase());
-
-    if (!existing) {
-      existing = {
-        id: `user_google_${Date.now()}`,
-        identifier: googleEmail,
-        type: 'email',
-        passwordHash: 'oauth_google_linked',
-        displayName: 'Usuário Google',
-        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-        provider: 'google',
-        createdAt: new Date().toISOString(),
-      };
-      saveLocalAccounts([...accounts, existing]);
-    }
-
-    const authUser: AuthUser = {
-      id: existing.id,
-      email: existing.identifier,
-      displayName: existing.displayName,
-      avatarUrl: existing.avatarUrl,
-      provider: 'google',
-      createdAt: existing.createdAt,
-    };
-
-    persistUserSession(authUser, remember);
-    return { success: true };
-  };
-
   // Password Recovery
   const resetPassword = async (
     identifier: string
@@ -492,7 +434,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setRememberMe,
         signInWithCredentials,
         signUpWithCredentials,
-        signInWithGoogle,
         resetPassword,
         signOut,
       }}
