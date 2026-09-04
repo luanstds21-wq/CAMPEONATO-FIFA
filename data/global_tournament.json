@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 92,
   "groupMatches": [
     {
       "id": 1,
@@ -10,8 +10,20 @@
       "homeTeam": "Chelsea XI",
       "awayTeam": "Porto",
       "userControls": "Porto",
-      "goals": [],
-      "isFinished": false
+      "goals": [
+        {
+          "id": "g1",
+          "minute": 34,
+          "team": "Porto",
+          "player": "Taremi"
+        }
+      ],
+      "isFinished": true,
+      "homeScore": 2,
+      "awayScore": 1,
+      "winnerTeam": "Chelsea XI",
+      "decisionType": "regular",
+      "updatedAt": "2026-09-04T13:25:45.856Z"
     },
     {
       "id": 2,
@@ -22,8 +34,20 @@
       "homeTeam": "Holanda",
       "awayTeam": "Chelsea",
       "userControls": "Chelsea",
-      "goals": [],
-      "isFinished": false
+      "goals": [
+        {
+          "id": "g2",
+          "minute": 12,
+          "team": "Holanda",
+          "player": "Gakpo"
+        }
+      ],
+      "isFinished": true,
+      "homeScore": 3,
+      "awayScore": 0,
+      "winnerTeam": "Holanda",
+      "decisionType": "regular",
+      "updatedAt": "2026-09-04T13:25:45.876Z"
     },
     {
       "id": 3,
@@ -867,5 +891,5 @@
     }
   ],
   "knockoutData": {},
-  "updatedAt": "2026-09-04T13:11:44.045Z"
+  "updatedAt": "2026-09-04T13:25:45.876Z"
 }

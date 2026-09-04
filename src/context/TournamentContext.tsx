@@ -121,25 +121,33 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Flag to avoid syncing on the very first mount before we fetch from server
   const isReadyToSyncRef = useRef<boolean>(false);
 
-  // Helper to sync state to server
+  // Helper to sync state to server (for simulation, import, or full state sync)
   const syncToServer = useCallback(
     async (
       groups: Match[],
-      knockout: Record<number, Partial<Match>>
+      knockout: Record<number, Partial<Match>>,
+      options?: { isSimulation?: boolean; isImport?: boolean }
     ) => {
       setSyncStatus('syncing');
       try {
         const response = await fetch('/api/tournament', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          keepalive: true,
           body: JSON.stringify({
             groupMatches: groups,
             knockoutData: knockout,
             clientId: myClientIdRef.current,
+            isSimulation: options?.isSimulation,
+            isImport: options?.isImport,
           }),
         });
 
         if (response.ok) {
+          const json = await response.json();
+          if (json.data) {
+            applyRemoteTournament(json.data);
+          }
           setSyncStatus('synced');
           setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
         } else {
@@ -155,7 +163,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Apply tournament payload helper
   const applyRemoteTournament = useCallback((data: { groupMatches: any[]; knockoutData?: Record<number, Partial<Match>> }) => {
-    if (data.groupMatches && Array.isArray(data.groupMatches) && data.groupMatches.length > 0) {
+    if (data && Array.isArray(data.groupMatches) && data.groupMatches.length > 0) {
       const merged = INITIAL_GROUP_MATCHES.map(initM => {
         const found = data.groupMatches.find((m: any) => m.id === initM.id);
         return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
@@ -186,23 +194,20 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return false;
   }, []);
 
-  // Fetch current shared tournament from server
+  // Fetch current shared tournament from server (with cache-busting)
   const fetchFromServer = useCallback(async () => {
     try {
-      const res = await fetch('/api/tournament');
+      const res = await fetch(`/api/tournament?ts=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+        },
+      });
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
-          const hasRemoteData = applyRemoteTournament(json.data);
-          if (!hasRemoteData) {
-            // Server tournament was empty, seed with initial matches
-            const cached = loadCachedTournament();
-            if (cached.groupMatches.some(m => m.isFinished)) {
-              await syncToServer(cached.groupMatches, cached.knockoutData);
-            } else {
-              await syncToServer(INITIAL_GROUP_MATCHES, {});
-            }
-          }
+          applyRemoteTournament(json.data);
         }
       }
     } catch (err) {
@@ -210,15 +215,14 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setSyncStatus('offline');
     } finally {
       setIsLoadingTournament(false);
-      isReadyToSyncRef.current = true;
     }
-  }, [applyRemoteTournament, syncToServer]);
+  }, [applyRemoteTournament]);
 
-  // Initial load + Real-time SSE listener setup
+  // Initial load + Real-time SSE listener setup + Mobile visibility refresh
   useEffect(() => {
     let isCancelled = false;
 
-    // 1. Initial fetch
+    // 1. Initial fetch from server
     fetchFromServer();
 
     // 2. Real-time Server-Sent Events (SSE) listener
@@ -247,7 +251,6 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
 
       eventSource.onerror = () => {
-        // Will auto-reconnect
         if (!isCancelled) {
           setSyncStatus('syncing');
         }
@@ -262,7 +265,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       console.warn('EventSource not supported or blocked:', err);
     }
 
-    // 3. Auto-sync on window focus / visibility change (e.g. user unlocks phone or switches tab)
+    // 3. Multi-event listener for mobile phone unlocks, tab switches, and page reveals
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         fetchFromServer();
@@ -270,30 +273,27 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', handleVisibility);
+    window.addEventListener('pageshow', handleVisibility);
 
-    // 4. Background polling fallback every 8 seconds in case SSE drops on mobile
+    // 4. Polling fallback every 3 seconds while active
     const pollInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         fetchFromServer();
       }
-    }, 8000);
+    }, 3000);
 
     return () => {
       isCancelled = true;
       if (eventSource) eventSource.close();
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', handleVisibility);
+      window.removeEventListener('pageshow', handleVisibility);
       clearInterval(pollInterval);
     };
   }, [fetchFromServer, applyRemoteTournament]);
 
-  // Debounced auto-save whenever local state changes
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
+  // Keep local storage in sync with state changes (client-side only, NO POST LOOP)
   useEffect(() => {
-    if (!isReadyToSyncRef.current) return;
-
-    // Cache locally immediately
     try {
       localStorage.setItem(
         SHARED_CACHE_KEY,
@@ -306,19 +306,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     } catch (e) {
       console.error('Error saving local tournament cache:', e);
     }
-
-    // Debounce server broadcast (500ms)
-    setSyncStatus('syncing');
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-
-    saveTimeoutRef.current = setTimeout(() => {
-      syncToServer(groupMatchesState, savedKnockoutData);
-    }, 500);
-
-    return () => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    };
-  }, [groupMatchesState, savedKnockoutData, syncToServer]);
+  }, [groupMatchesState, savedKnockoutData]);
 
   // Force manual refresh from server
   const refreshFromCloud = async () => {
@@ -409,8 +397,8 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }, 0);
   }, [matches]);
 
-  // Action: Save Match Result (optimistic + auto sync)
-  const saveMatch = (
+  // Action: Save Match Result (optimistic + instant atomic server sync)
+  const saveMatch = async (
     matchId: number,
     data: {
       homeScore: number;
@@ -424,14 +412,17 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   ) => {
     const updatedAt = new Date().toISOString();
 
+    // 1. Immediate optimistic UI update
     if (matchId <= 72) {
       // Group match
       setGroupMatchesState(prev =>
         prev.map(m => {
           if (m.id === matchId) {
-            let winner: string | undefined = undefined;
-            if (data.homeScore > data.awayScore) winner = m.homeTeam;
-            else if (data.awayScore > data.homeScore) winner = m.awayTeam;
+            let winner: string | undefined = data.winnerTeam;
+            if (winner === undefined) {
+              if (data.homeScore > data.awayScore) winner = m.homeTeam;
+              else if (data.awayScore > data.homeScore) winner = m.awayTeam;
+            }
 
             return {
               ...m,
@@ -464,10 +455,47 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         },
       }));
     }
+
+    // 2. Direct atomic sync to server (keepalive: true ensures completion even if mobile app backgrounded)
+    setSyncStatus('syncing');
+    try {
+      const response = await fetch('/api/tournament/match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
+        body: JSON.stringify({
+          matchId,
+          homeScore: data.homeScore,
+          awayScore: data.awayScore,
+          goals: data.goals,
+          winnerTeam: data.winnerTeam,
+          decisionType: data.decisionType,
+          homePenalties: data.homePenalties,
+          awayPenalties: data.awayPenalties,
+          clientId: myClientIdRef.current,
+        }),
+      });
+
+      if (response.ok) {
+        const json = await response.json();
+        if (json.data) {
+          applyRemoteTournament(json.data);
+        }
+        setSyncStatus('synced');
+        setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      } else {
+        setSyncStatus('error');
+      }
+    } catch (err) {
+      console.warn('Match sync error:', err);
+      setSyncStatus('offline');
+    }
   };
 
   // Action: Reset single match
-  const resetMatch = (matchId: number) => {
+  const resetMatch = async (matchId: number) => {
+    const updatedAt = new Date().toISOString();
+
     if (matchId <= 72) {
       setGroupMatchesState(prev =>
         prev.map(m => {
@@ -482,7 +510,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               decisionType: undefined,
               homePenalties: undefined,
               awayPenalties: undefined,
-              updatedAt: undefined,
+              updatedAt,
             };
           }
           return m;
@@ -495,10 +523,34 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return copy;
       });
     }
+
+    setSyncStatus('syncing');
+    try {
+      const response = await fetch('/api/tournament/reset-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
+        body: JSON.stringify({
+          matchId,
+          clientId: myClientIdRef.current,
+        }),
+      });
+
+      if (response.ok) {
+        const json = await response.json();
+        if (json.data) {
+          applyRemoteTournament(json.data);
+        }
+        setSyncStatus('synced');
+        setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      }
+    } catch (err) {
+      console.error('Reset match error:', err);
+    }
   };
 
   // Action: Reset entire shared tournament
-  const resetTournament = () => {
+  const resetTournament = async () => {
     setGroupMatchesState(INITIAL_GROUP_MATCHES);
     setSavedKnockoutData({});
     try {
@@ -506,7 +558,25 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     } catch (e) {
       console.error(e);
     }
-    syncToServer(INITIAL_GROUP_MATCHES, {});
+
+    setSyncStatus('syncing');
+    try {
+      const res = await fetch('/api/tournament/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: myClientIdRef.current }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data) {
+          applyRemoteTournament(json.data);
+        }
+        setSyncStatus('synced');
+        setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      }
+    } catch (err) {
+      console.error('Reset tournament error:', err);
+    }
   };
 
   // Export JSON (Complete backup of shared tournament)
@@ -550,7 +620,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           console.warn('Cache write error:', e);
         }
 
-        syncToServer(newGroups, newKnockout);
+        syncToServer(newGroups, newKnockout, { isImport: true });
         return true;
       }
     } catch (e) {
@@ -664,7 +734,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return m;
       });
 
-      syncToServer(updated, savedKnockoutData);
+      syncToServer(updated, savedKnockoutData, { isSimulation: true });
       return updated;
     });
   };

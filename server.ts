@@ -193,6 +193,15 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '25mb' }));
 
+  // Prevent any browser or CDN from caching API responses (critical for multi-device sync)
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+    next();
+  });
+
   // Health check
   app.get('/api/health', (_req, res) => {
     res.json({
@@ -249,19 +258,186 @@ async function startServer() {
     });
   });
 
-  // Save changes to the single shared tournament
+  // Atomic match result update (instant sync from any device)
+  app.post('/api/tournament/match', (req, res) => {
+    try {
+      const {
+        matchId,
+        homeScore,
+        awayScore,
+        goals,
+        winnerTeam,
+        decisionType,
+        homePenalties,
+        awayPenalties,
+        clientId,
+      } = req.body;
+
+      if (typeof matchId !== 'number') {
+        return res.status(400).json({ success: false, error: 'matchId é obrigatório.' });
+      }
+
+      const updatedAt = new Date().toISOString();
+
+      if (matchId <= 72) {
+        // Group match
+        let found = false;
+        currentTournament.groupMatches = currentTournament.groupMatches.map((m: any) => {
+          if (m.id === matchId) {
+            found = true;
+            let winner = winnerTeam;
+            if (winner === undefined) {
+              if (homeScore > awayScore) winner = m.homeTeam;
+              else if (awayScore > homeScore) winner = m.awayTeam;
+            }
+            return {
+              ...m,
+              homeScore: Number(homeScore) || 0,
+              awayScore: Number(awayScore) || 0,
+              goals: Array.isArray(goals) ? goals : [],
+              isFinished: true,
+              winnerTeam: winner,
+              decisionType: 'regular',
+              updatedAt,
+            };
+          }
+          return m;
+        });
+
+        if (!found) {
+          // If match wasn't in list, find from initial and add
+          const initM = INITIAL_GROUP_MATCHES.find(m => m.id === matchId);
+          if (initM) {
+            let winner = winnerTeam;
+            if (winner === undefined) {
+              if (homeScore > awayScore) winner = initM.homeTeam;
+              else if (awayScore > homeScore) winner = initM.awayTeam;
+            }
+            currentTournament.groupMatches.push({
+              ...initM,
+              homeScore: Number(homeScore) || 0,
+              awayScore: Number(awayScore) || 0,
+              goals: Array.isArray(goals) ? goals : [],
+              isFinished: true,
+              winnerTeam: winner,
+              decisionType: 'regular',
+              updatedAt,
+            });
+          }
+        }
+      } else {
+        // Knockout match
+        currentTournament.knockoutData = {
+          ...currentTournament.knockoutData,
+          [matchId]: {
+            homeScore: Number(homeScore) || 0,
+            awayScore: Number(awayScore) || 0,
+            goals: Array.isArray(goals) ? goals : [],
+            isFinished: true,
+            winnerTeam,
+            decisionType: decisionType || 'regular',
+            homePenalties: typeof homePenalties === 'number' ? homePenalties : undefined,
+            awayPenalties: typeof awayPenalties === 'number' ? awayPenalties : undefined,
+            updatedAt,
+          },
+        };
+      }
+
+      currentTournament.version = (currentTournament.version || 0) + 1;
+      currentTournament.updatedAt = updatedAt;
+
+      saveTournamentToDisk(currentTournament);
+      broadcastTournamentUpdate(clientId);
+
+      return res.json({
+        success: true,
+        version: currentTournament.version,
+        updatedAt: currentTournament.updatedAt,
+        data: currentTournament,
+      });
+    } catch (err) {
+      console.error('Save match error:', err);
+      return res.status(500).json({ success: false, error: 'Erro ao salvar partida.' });
+    }
+  });
+
+  // Atomic match reset (clear a single match)
+  app.post('/api/tournament/reset-match', (req, res) => {
+    try {
+      const { matchId, clientId } = req.body;
+      if (typeof matchId !== 'number') {
+        return res.status(400).json({ success: false, error: 'matchId é obrigatório.' });
+      }
+
+      const updatedAt = new Date().toISOString();
+
+      if (matchId <= 72) {
+        currentTournament.groupMatches = currentTournament.groupMatches.map((m: any) => {
+          if (m.id === matchId) {
+            return {
+              ...m,
+              homeScore: undefined,
+              awayScore: undefined,
+              goals: [],
+              isFinished: false,
+              winnerTeam: undefined,
+              decisionType: undefined,
+              updatedAt,
+            };
+          }
+          return m;
+        });
+      } else {
+        const nextKnockout = { ...currentTournament.knockoutData };
+        delete nextKnockout[matchId];
+        currentTournament.knockoutData = nextKnockout;
+      }
+
+      currentTournament.version = (currentTournament.version || 0) + 1;
+      currentTournament.updatedAt = updatedAt;
+
+      saveTournamentToDisk(currentTournament);
+      broadcastTournamentUpdate(clientId);
+
+      return res.json({
+        success: true,
+        version: currentTournament.version,
+        updatedAt: currentTournament.updatedAt,
+        data: currentTournament,
+      });
+    } catch (err) {
+      console.error('Reset match error:', err);
+      return res.status(500).json({ success: false, error: 'Erro ao resetar partida.' });
+    }
+  });
+
+  // Save full tournament (for simulation, import, or batch updates)
   app.post('/api/tournament', (req, res) => {
     try {
-      const { groupMatches, knockoutData, clientId } = req.body;
+      const { groupMatches, knockoutData, clientId, isReset, isImport, isSimulation } = req.body;
 
       if (!groupMatches || !Array.isArray(groupMatches)) {
         return res.status(400).json({ success: false, error: 'groupMatches deve ser uma lista válida.' });
       }
 
+      let finalGroupMatches = groupMatches;
+
+      // Protection: if not an explicit reset, import, or simulation, preserve any played matches already on the server
+      if (!isReset && !isImport && !isSimulation) {
+        finalGroupMatches = groupMatches.map((incomingM: any) => {
+          const existingM = currentTournament.groupMatches.find((e: any) => e.id === incomingM.id);
+          if (existingM && existingM.isFinished && !incomingM.isFinished) {
+            // Keep the finished match from the server
+            return existingM;
+          }
+          return incomingM;
+        });
+      }
+
       currentTournament = {
         version: (currentTournament.version || 0) + 1,
-        groupMatches,
-        knockoutData: knockoutData || {},
+        groupMatches: finalGroupMatches,
+        knockoutData: knockoutData || currentTournament.knockoutData || {},
         updatedAt: new Date().toISOString(),
       };
 
@@ -272,6 +448,7 @@ async function startServer() {
         success: true,
         version: currentTournament.version,
         updatedAt: currentTournament.updatedAt,
+        data: currentTournament,
       });
     } catch (err) {
       console.error('Save tournament error:', err);
@@ -297,6 +474,7 @@ async function startServer() {
         success: true,
         version: currentTournament.version,
         updatedAt: currentTournament.updatedAt,
+        data: currentTournament,
       });
     } catch (err) {
       console.error('Reset tournament error:', err);
