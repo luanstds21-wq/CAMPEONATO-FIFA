@@ -167,7 +167,7 @@ export const StatsView: React.FC = () => {
                       <th className="py-3 px-3 w-12 text-center">Rank</th>
                       <th className="py-3 px-3">Jogador</th>
                       <th className="py-3 px-3">Equipe(s)</th>
-                      <th className="py-3 px-3 text-center">Média por Jogo</th>
+                      <th className="py-3 px-3 text-center">Jogos</th>
                       <th className="py-3 px-3 text-center font-extrabold text-emerald-400">
                         Gols Marcados
                       </th>
@@ -224,7 +224,7 @@ export const StatsView: React.FC = () => {
                           </div>
                         </td>
                         <td className="py-3 px-3 text-center font-mono text-slate-300">
-                          {p.avgGoals} / jogo
+                          {p.matchesPlayed}
                         </td>
                         <td className="py-3 px-3 text-center">
                           <span className="font-mono text-base font-extrabold text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-lg border border-emerald-500/20">
@@ -293,7 +293,7 @@ export const StatsView: React.FC = () => {
                       <th className="py-3 px-3 w-12 text-center">Rank</th>
                       <th className="py-3 px-3">Jogador</th>
                       <th className="py-3 px-3">Equipe(s)</th>
-                      <th className="py-3 px-3 text-center">Média por Jogo</th>
+                      <th className="py-3 px-3 text-center">Jogos</th>
                       <th className="py-3 px-3 text-center font-extrabold text-cyan-400">
                         Assistências
                       </th>
@@ -340,7 +340,7 @@ export const StatsView: React.FC = () => {
                           </div>
                         </td>
                         <td className="py-3 px-3 text-center font-mono text-slate-300">
-                          {p.avgAssists} / jogo
+                          {p.matchesPlayed}
                         </td>
                         <td className="py-3 px-3 text-center">
                           <span className="font-mono text-base font-extrabold text-cyan-400 bg-cyan-500/10 px-3 py-1 rounded-lg border border-cyan-500/20">
@@ -409,9 +409,9 @@ export const StatsView: React.FC = () => {
                       <th className="py-3 px-3 w-12 text-center">Rank</th>
                       <th className="py-3 px-3">Jogador</th>
                       <th className="py-3 px-3">Equipe(s)</th>
+                      <th className="py-3 px-3 text-center">Jogos</th>
                       <th className="py-3 px-3 text-center">Gols</th>
                       <th className="py-3 px-3 text-center">Assistências</th>
-                      <th className="py-3 px-3 text-center">Média por Jogo</th>
                       <th className="py-3 px-3 text-center font-extrabold text-amber-400">
                         Participações (G+A)
                       </th>
@@ -467,14 +467,14 @@ export const StatsView: React.FC = () => {
                             ))}
                           </div>
                         </td>
+                        <td className="py-3 px-3 text-center font-mono text-slate-300">
+                          {p.matchesPlayed}
+                        </td>
                         <td className="py-3 px-3 text-center font-mono font-bold text-emerald-400">
                           {p.goals}
                         </td>
                         <td className="py-3 px-3 text-center font-mono font-bold text-cyan-400">
                           {p.assists}
-                        </td>
-                        <td className="py-3 px-3 text-center font-mono text-slate-300">
-                          {p.avgContributions} / jogo
                         </td>
                         <td className="py-3 px-3 text-center">
                           <span className="font-mono text-base font-extrabold text-amber-400 bg-amber-500/10 px-3 py-1 rounded-lg border border-amber-500/20">
