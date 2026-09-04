@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { AuthUser } from '../types/auth';
-import { isSupabaseConfigured, parseIdentifier, supabase } from '../lib/supabase';
+import { isSupabaseConfigured, parseIdentifier, matchIdentifiers, supabase } from '../lib/supabase';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -90,6 +90,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     async function initSession() {
       setLoading(true);
+
+      // Auto-sync any existing local accounts from browser storage to server
+      try {
+        const localAccounts = getLocalAccounts();
+        if (localAccounts.length > 0) {
+          fetch('/api/auth/sync-local', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ localAccounts }),
+          }).catch(() => {
+            // Non-blocking background sync
+          });
+        }
+      } catch {
+        // Non-blocking
+      }
 
       // 1. If Supabase is configured, listen to Supabase Auth state
       if (isSupabaseConfigured && supabase) {
@@ -225,11 +241,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    // Local / Offline authentication
+    // 2. Primary Cross-Device Authentication via Server API
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: identifier.trim(), password }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success && data.user) {
+        const authUser: AuthUser = data.user;
+        persistUserSession(authUser, remember);
+
+        // Update local accounts mirror cache
+        const accounts = getLocalAccounts();
+        const exists = accounts.find(a => matchIdentifiers(a.identifier, identifier));
+        if (!exists) {
+          saveLocalAccounts([
+            ...accounts,
+            {
+              id: authUser.id,
+              identifier: authUser.email || authUser.phone || identifier,
+              type: authUser.phone ? 'phone' : 'email',
+              passwordHash: password,
+              displayName: authUser.displayName,
+              provider: (authUser.provider as 'email' | 'phone') || 'phone',
+              createdAt: authUser.createdAt || new Date().toISOString(),
+            },
+          ]);
+        }
+
+        return { success: true };
+      } else if (data.error && response.status !== 500) {
+        return { success: false, error: data.error };
+      }
+    } catch (networkErr) {
+      console.warn('Server login API unreachable, falling back to local cache:', networkErr);
+    }
+
+    // 3. Fallback to Local / Offline authentication
     const accounts = getLocalAccounts();
-    const found = accounts.find(
-      acc => acc.identifier.toLowerCase() === parsed.value.toLowerCase()
-    );
+    const found = accounts.find(acc => matchIdentifiers(acc.identifier, identifier));
 
     if (!found) {
       return {
@@ -322,11 +376,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    // Local / Offline Registration
+    // 2. Primary Cross-Device Registration via Server API
+    try {
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: identifier.trim(),
+          password,
+          displayName: displayName.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success && data.user) {
+        const authUser: AuthUser = data.user;
+        persistUserSession(authUser, remember);
+
+        // Cache mirror locally
+        const accounts = getLocalAccounts();
+        saveLocalAccounts([
+          ...accounts,
+          {
+            id: authUser.id,
+            identifier: authUser.email || authUser.phone || identifier,
+            type: authUser.phone ? 'phone' : 'email',
+            passwordHash: password,
+            displayName: authUser.displayName,
+            provider: (authUser.provider as 'email' | 'phone') || 'phone',
+            createdAt: authUser.createdAt || new Date().toISOString(),
+          },
+        ]);
+
+        return { success: true };
+      } else if (data.error) {
+        return { success: false, error: data.error };
+      }
+    } catch (networkErr) {
+      console.warn('Server register API unreachable, falling back to local save:', networkErr);
+    }
+
+    // 3. Fallback to Local / Offline Registration
     const accounts = getLocalAccounts();
-    const existing = accounts.find(
-      acc => acc.identifier.toLowerCase() === parsed.value.toLowerCase()
-    );
+    const existing = accounts.find(acc => matchIdentifiers(acc.identifier, identifier));
 
     if (existing) {
       return {
@@ -342,7 +435,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       identifier: parsed.value,
       type: parsed.type,
       passwordHash: password,
-      displayName: displayName.trim() || parsed.value.split('@')[0],
+      displayName: displayName.trim() || (parsed.type === 'email' ? parsed.value.split('@')[0] : 'Treinador'),
       provider: parsed.type,
       createdAt: new Date().toISOString(),
     };
@@ -386,11 +479,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
+    // Server API reset password
+    try {
+      const response = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: identifier.trim() }),
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        return { success: true, message: data.message };
+      } else if (data.error) {
+        return { success: false, error: data.error };
+      }
+    } catch {
+      // Local fallback
+    }
+
     // Local simulation
     const accounts = getLocalAccounts();
-    const found = accounts.find(
-      a => a.identifier.toLowerCase() === parsed.value.toLowerCase()
-    );
+    const found = accounts.find(a => matchIdentifiers(a.identifier, identifier));
     if (!found) {
       return {
         success: false,

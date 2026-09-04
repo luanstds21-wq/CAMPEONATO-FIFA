@@ -127,43 +127,67 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const isInitialUserLoadRef = useRef(true);
 
   // Sync to Supabase helper
-  const syncToSupabase = useCallback(
+  // Sync helper: Supabase or Server API
+  const syncToServer = useCallback(
     async (
       uid: string,
       groups: Match[],
       knockout: Record<number, Partial<Match>>
     ) => {
-      if (!isSupabaseConfigured || !supabase || uid === 'guest') {
+      if (!uid || uid === 'guest') {
         setSyncStatus('offline');
         return;
       }
 
-      try {
-        setSyncStatus('syncing');
-        const payload = {
-          id: `tournament_${uid}`,
-          user_id: uid,
-          name: 'FIFA Champions 48',
-          version: 2,
-          group_matches: groups,
-          knockout_data: knockout,
-          updated_at: new Date().toISOString(),
-        };
+      setSyncStatus('syncing');
 
-        const { error } = await supabase.from('tournaments').upsert(payload, {
-          onConflict: 'id',
+      // 1. If Supabase is configured
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const payload = {
+            id: `tournament_${uid}`,
+            user_id: uid,
+            name: 'FIFA Champions 48',
+            version: 2,
+            group_matches: groups,
+            knockout_data: knockout,
+            updated_at: new Date().toISOString(),
+          };
+
+          const { error } = await supabase.from('tournaments').upsert(payload, {
+            onConflict: 'id',
+          });
+
+          if (!error) {
+            setSyncStatus('synced');
+            setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+            return;
+          }
+        } catch {
+          // Fall through to server API
+        }
+      }
+
+      // 2. Primary / Built-in Server API
+      try {
+        const response = await fetch(`/api/tournaments/${encodeURIComponent(uid)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            groupMatches: groups,
+            knockoutData: knockout,
+          }),
         });
 
-        if (error) {
-          console.warn('Supabase sync error:', error.message);
-          setSyncStatus('error');
-        } else {
+        if (response.ok) {
           setSyncStatus('synced');
           setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+        } else {
+          setSyncStatus('offline');
         }
       } catch (err) {
-        console.warn('Sync failed:', err);
-        setSyncStatus('error');
+        console.warn('Server sync error:', err);
+        setSyncStatus('offline');
       }
     },
     []
@@ -182,46 +206,67 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setGroupMatchesState(local.groupMatches);
       setSavedKnockoutData(local.knockoutData);
 
-      // 2. If Supabase is connected and we have a valid logged in user, fetch from cloud
-      if (isSupabaseConfigured && supabase && user?.id) {
+      // 2. If user is logged in, fetch from Server API or Supabase
+      if (user?.id) {
         setSyncStatus('syncing');
         try {
-          const { data, error } = await supabase
-            .from('tournaments')
-            .select('*')
-            .eq('user_id', user.id)
-            .maybeSingle();
+          let loaded = false;
 
-          if (!isCancelled) {
-            if (data && data.group_matches && Array.isArray(data.group_matches)) {
-              const merged = INITIAL_GROUP_MATCHES.map(initM => {
-                const found = data.group_matches.find((m: Match) => m.id === initM.id);
-                return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
-              });
+          // Try Supabase if configured
+          if (isSupabaseConfigured && supabase) {
+            try {
+              const { data, error } = await supabase
+                .from('tournaments')
+                .select('*')
+                .eq('user_id', user.id)
+                .maybeSingle();
 
-              setGroupMatchesState(merged);
-              setSavedKnockoutData(data.knockout_data || {});
+              if (!error && data && data.group_matches && Array.isArray(data.group_matches)) {
+                const merged = INITIAL_GROUP_MATCHES.map(initM => {
+                  const found = data.group_matches.find((m: Match) => m.id === initM.id);
+                  return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+                });
 
-              // Update local cache
-              const key = getStorageKey(user.id);
-              localStorage.setItem(
-                key,
-                JSON.stringify({
-                  groupMatches: merged,
-                  knockoutData: data.knockout_data || {},
-                  updatedAt: data.updated_at || new Date().toISOString(),
-                })
-              );
+                if (!isCancelled) {
+                  setGroupMatchesState(merged);
+                  setSavedKnockoutData(data.knockout_data || {});
+                  setSyncStatus('synced');
+                  setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+                  loaded = true;
+                }
+              }
+            } catch {
+              // Fallback to server API
+            }
+          }
 
-              setSyncStatus('synced');
-              setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-            } else if (!error && !data) {
-              // No tournament in cloud yet, initialize with current local data
-              await syncToSupabase(user.id, local.groupMatches, local.knockoutData);
+          // Try Server API
+          if (!loaded) {
+            const res = await fetch(`/api/tournaments/${encodeURIComponent(user.id)}`);
+            if (res.ok) {
+              const resData = await res.json();
+              if (resData.success && resData.data && resData.data.groupMatches) {
+                const serverGroups = resData.data.groupMatches;
+                const merged = INITIAL_GROUP_MATCHES.map(initM => {
+                  const found = serverGroups.find((m: Match) => m.id === initM.id);
+                  return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+                });
+
+                if (!isCancelled) {
+                  setGroupMatchesState(merged);
+                  setSavedKnockoutData(resData.data.knockoutData || {});
+                  setSyncStatus('synced');
+                  setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+                  loaded = true;
+                }
+              } else if (!resData.data && (local.groupMatches.some(m => m.played) || Object.keys(local.knockoutData).length > 0)) {
+                // Initialize server with existing local tournament
+                await syncToServer(user.id, local.groupMatches, local.knockoutData);
+              }
             }
           }
         } catch (e) {
-          console.warn('Error fetching user tournament from Supabase:', e);
+          console.warn('Error fetching user tournament from server:', e);
           if (!isCancelled) setSyncStatus('offline');
         }
       } else {
@@ -241,7 +286,7 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => {
       isCancelled = true;
     };
-  }, [activeUserId, user?.id, loadLocalUserData, syncToSupabase]);
+  }, [activeUserId, user?.id, loadLocalUserData, syncToServer]);
 
   // Debounce saving whenever groupMatchesState or savedKnockoutData updates
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -262,44 +307,65 @@ export const TournamentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       console.error('Error saving local tournament cache:', e);
     }
 
-    // 2. Debounce cloud sync to Supabase
-    if (isSupabaseConfigured && supabase && user?.id) {
+    // 2. Debounce cloud sync to Server / Supabase
+    if (user?.id) {
       setSyncStatus('syncing');
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
       saveTimeoutRef.current = setTimeout(() => {
-        syncToSupabase(user.id, groupMatchesState, savedKnockoutData);
+        syncToServer(user.id, groupMatchesState, savedKnockoutData);
       }, 700);
     }
 
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [groupMatchesState, savedKnockoutData, activeUserId, user?.id, syncToSupabase]);
+  }, [groupMatchesState, savedKnockoutData, activeUserId, user?.id, syncToServer]);
 
-  // Force refresh from cloud
+  // Force refresh from cloud / server
   const refreshFromCloud = async () => {
-    if (!isSupabaseConfigured || !supabase || !user?.id) return;
+    if (!user?.id) return;
     setIsLoadingTournament(true);
     setSyncStatus('syncing');
 
     try {
-      const { data } = await supabase
-        .from('tournaments')
-        .select('*')
-        .eq('user_id', user.id)
-        .maybeSingle();
+      if (isSupabaseConfigured && supabase) {
+        const { data } = await supabase
+          .from('tournaments')
+          .select('*')
+          .eq('user_id', user.id)
+          .maybeSingle();
 
-      if (data && data.group_matches && Array.isArray(data.group_matches)) {
-        const merged = INITIAL_GROUP_MATCHES.map(initM => {
-          const found = data.group_matches.find((m: Match) => m.id === initM.id);
-          return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
-        });
+        if (data && data.group_matches && Array.isArray(data.group_matches)) {
+          const merged = INITIAL_GROUP_MATCHES.map(initM => {
+            const found = data.group_matches.find((m: Match) => m.id === initM.id);
+            return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+          });
 
-        setGroupMatchesState(merged);
-        setSavedKnockoutData(data.knockout_data || {});
-        setSyncStatus('synced');
-        setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+          setGroupMatchesState(merged);
+          setSavedKnockoutData(data.knockout_data || {});
+          setSyncStatus('synced');
+          setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+          return;
+        }
+      }
+
+      // Fallback or Primary: Server API
+      const res = await fetch(`/api/tournaments/${encodeURIComponent(user.id)}`);
+      if (res.ok) {
+        const resData = await res.json();
+        if (resData.success && resData.data && resData.data.groupMatches) {
+          const serverGroups = resData.data.groupMatches;
+          const merged = INITIAL_GROUP_MATCHES.map(initM => {
+            const found = serverGroups.find((m: Match) => m.id === initM.id);
+            return found ? { ...initM, ...found, goals: Array.isArray(found.goals) ? found.goals : [] } : initM;
+          });
+
+          setGroupMatchesState(merged);
+          setSavedKnockoutData(resData.data.knockoutData || {});
+          setSyncStatus('synced');
+          setLastSyncedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+        }
       }
     } catch (err) {
       console.warn('Refresh error:', err);
